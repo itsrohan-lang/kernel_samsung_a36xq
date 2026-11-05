@@ -1,3 +1,4 @@
+# Kernel build output
 /out/
 *.o
 *.o.*
@@ -10,3 +11,14 @@
 *.symvers
 Module.symvers
 modules.order
+
+# Windows cannot open reserved DOS device names (AUX), so Git cannot index
+# these six files. Both trees are dead code for this device: nouveau is a
+# desktop NVIDIA driver and include/soc/arc is Synopsys ARC - neither is
+# built for arm64/parrot.
+kernel_platform/common/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c
+kernel_platform/common/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.h
+kernel_platform/common/include/soc/arc/aux.h
+kernel_platform/msm-kernel/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c
+kernel_platform/msm-kernel/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.h
+kernel_platform/msm-kernel/include/soc/arc/aux.h
