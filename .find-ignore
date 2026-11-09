@@ -1,0 +1,11 @@
+# Marker for build/soong's module finder.
+#
+# This kernel tree is normally cloned into an Android source tree at
+# kernel/samsung/a36xq. It carries its own copy of vendor/qcom/opensource/**
+# (interfaces, core-utils, commonsys, usb, vibrator, healthd, power, thermal,
+# ...) whose Android.bp / Android.mk modules duplicate the ones already
+# provided by vendor/qcom/opensource and hardware/qcom-caf in the ROM.
+#
+# The presence of this file makes soong_ui prune this whole directory from its
+# Android.bp / Android.mk discovery walk, so those copies are never parsed.
+# It has no effect on Kleaf/Bazel kernel builds.
