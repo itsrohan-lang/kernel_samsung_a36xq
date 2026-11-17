@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Keep the AArch64-only signal/ptrace layouts out of the exported header set.
+#
+# `make headers_install` on this tree installs arch/arm64/include/uapi/asm into
+# usr/include/asm, and Lineage's generated_kernel_includes generator puts
+# usr/include on the -I list of every module that uses the qcom-caf kernel
+# header libs - including the 32-bit android_vendor_arm_* variants (for example
+# hardware/qcom-caf/*/audio/graphservices/ar_osal:liblx-osal).
+#
+# asm/sigcontext.h and asm/ptrace.h describe the AArch64 register state and use
+# __uint128_t, which clang cannot represent for -target armv7a-linux-androideabi
+# ("unknown type name '__uint128_t'"). Bionic ships per-arch cleaned copies at
+# libc/kernel/uapi/asm-arm and asm-arm64, so dropping these two from the export
+# lets each ABI pick up the header that matches its own layout.
+no-export-headers += asm/ptrace.h
+no-export-headers += asm/sigcontext.h
