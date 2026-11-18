@@ -12,3 +12,15 @@ ifeq ($(wildcard $(objtree)/arch/$(SRCARCH)/include/generated/uapi/asm/kvm_para.
 no-export-headers += linux/kvm_para.h
 endif
 endif
+
+# bionic's <sched.h> includes <linux/sched/types.h> for sched_attr and then
+# defines struct sched_param itself. Bionic ships its own sanitized copy of the
+# kernel header (libc/kernel/uapi/linux/sched/types.h) that omits struct
+# sched_param; exporting the raw kernel file shadows that copy, because
+# usr/include comes before bionic's kernel/uapi on the include path of every
+# module that uses the qcom-caf kernel header libraries. Any such module whose
+# code reaches <sched.h> then fails with:
+#
+#   bionic/libc/include/sched.h:100:8: error: redefinition of 'sched_param'
+#   usr/include/linux/sched/types.h:7:8: note: previous definition is here
+no-export-headers += linux/sched/types.h
