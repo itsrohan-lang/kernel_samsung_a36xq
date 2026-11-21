@@ -44,6 +44,8 @@
   mas_walk
   mas_prev
   mas_next
+  mii_check_media
+  mii_ethtool_gset
   mm_access
   netlink_ack
   param_get_uint
@@ -115,6 +117,7 @@
   __traceiter_android_vh_madvise_pageout_swap_entry
   __traceiter_android_vh_madvise_swapin_walk_pmd_entry
   __traceiter_android_vh_meminfo_proc_show
+  __traceiter_android_vh_migration_target_bypass
   __traceiter_android_vh_mmc_update_mmc_queue
   __traceiter_android_vh_si_meminfo_adjust_shmem
   __traceiter_android_vh_shmem_mod_shmem
@@ -133,7 +136,6 @@
   __traceiter_android_vh_smaps_pte_entry
   __traceiter_android_vh_smaps_swap_shared
   __traceiter_android_vh_show_smap_swap_shared
-  __traceiter_android_vh_migration_target_bypass
   __traceiter_android_vh_split_large_folio_bypass
   __traceiter_android_vh_sync_irq_wait_finish
   __traceiter_android_vh_sync_irq_wait_start
@@ -204,6 +206,7 @@
   __tracepoint_android_vh_madvise_pageout_swap_entry
   __tracepoint_android_vh_madvise_swapin_walk_pmd_entry
   __tracepoint_android_vh_meminfo_proc_show
+  __tracepoint_android_vh_migration_target_bypass
   __tracepoint_android_vh_mmc_update_mmc_queue
   __tracepoint_android_vh_si_meminfo_adjust_shmem
   __tracepoint_android_vh_shmem_mod_shmem
@@ -225,7 +228,6 @@
   __tracepoint_android_vh_split_large_folio_bypass
   __tracepoint_android_vh_sync_irq_wait_finish
   __tracepoint_android_vh_sync_irq_wait_start
-  __tracepoint_android_vh_migration_target_bypass
   __tracepoint_android_vh_try_to_freeze_todo
   __tracepoint_android_vh_try_to_freeze_todo_unfrozen
   __tracepoint_android_vh_tune_scan_control
@@ -246,17 +248,11 @@
   __tracepoint_vm_unmapped_area
   __tracepoint_workqueue_execute_start
   __tracepoint_kfree_skb
+  usbnet_get_link
+  usbnet_get_link_ksettings_mii
+  usbnet_nway_reset
+  usbnet_set_link_ksettings_mii
   usb_set_device_state
   yield
   regulator_get_current_limit
   android_create_function_device
-  __kfifo_init
-  gs_alloc_req
-  gs_free_req
-  gserial_alloc_line
-  gserial_connect
-  gserial_disconnect
-  gserial_free_line
-  gserial_resume
-  gserial_suspend
-  usb_gstrings_attach

@@ -1,11 +1,5 @@
 # Host MHI stack
-obj-y  += host/
+obj-$(CONFIG_MHI_BUS) += host/
 
 # Endpoint MHI stack
-obj-y += ep/
-
-# MHI Devices stack
-obj-y += devices/
-
-#MHI Controller stack
-obj-y += controllers/
+obj-$(CONFIG_MHI_BUS_EP) += ep/

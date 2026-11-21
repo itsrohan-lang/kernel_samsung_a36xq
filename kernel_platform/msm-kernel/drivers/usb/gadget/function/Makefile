@@ -57,23 +57,5 @@ usb_f_printer-y			:= f_printer.o
 obj-$(CONFIG_USB_F_PRINTER)	+= usb_f_printer.o
 usb_f_tcm-y			:= f_tcm.o
 obj-$(CONFIG_USB_F_TCM)		+= usb_f_tcm.o
-obj-$(CONFIG_USB_F_FS_IPC_LOGGING)	+= f_fs_ipc_log.o
-usb_f_cdev-y			:= f_cdev.o
-obj-$(CONFIG_USB_F_CDEV)	+= usb_f_cdev.o
-usb_f_ccid-y			:= f_ccid.o
-obj-$(CONFIG_USB_F_CCID)	+= usb_f_ccid.o
-usb_f_qdss-y			:= f_qdss.o u_qdss.o
-obj-$(CONFIG_USB_F_QDSS)	+= usb_f_qdss.o
-usb_f_gsi-y			:= f_gsi.o
-ifeq ($(CONFIG_USB_F_RNDIS),)
-usb_f_gsi-y			+= rndis.o
-endif
-obj-$(CONFIG_USB_F_GSI)		+= usb_f_gsi.o
 usb_f_acc-y			:= android_f_accessory.o
 obj-$(CONFIG_ANDROID_USB_F_ACC)	+= usb_f_acc.o
-usb_f_conn_gadget-y             := f_conn_gadget.o
-obj-$(CONFIG_USB_F_CONN_GADGET) += usb_f_conn_gadget.o
-usb_f_ss_mon_gadget-y             := f_ss_mon_gadget.o
-obj-$(CONFIG_USB_F_SS_MON_GADGET) += usb_f_ss_mon_gadget.o
-usb_f_ss_acm-y             := f_ss_acm.o
-obj-$(CONFIG_USB_F_SS_ACM) += usb_f_ss_acm.o

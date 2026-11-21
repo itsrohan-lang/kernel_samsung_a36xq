@@ -205,15 +205,4 @@ elif [ "${LOCALVERSION+set}" != "set" ]; then
 	scm_version="$(scm_version --short)"
 fi
 
-sec_localversion()
-{
-	# NOTE: forcley unset unused strings
-	LOCALVERSION=""
-	scm_version=""
-
-	file_localversion=$(echo ${file_localversion} | perl -pe 's/\-maybe\-dirty//')
-}
-
-sec_localversion
-
 echo "${KERNELVERSION}${file_localversion}${config_localversion}${LOCALVERSION}${scm_version}"

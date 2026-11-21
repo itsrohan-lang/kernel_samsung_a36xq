@@ -12,7 +12,6 @@
 #include <linux/audit.h>
 #include <linux/numa.h>
 #include <linux/scs.h>
-#include <linux/task_integrity.h>
 
 #include <linux/uaccess.h>
 
@@ -56,11 +55,6 @@ unsigned long init_shadow_call_stack[SCS_SIZE / sizeof(long)]
 		__init_task_data = {
 	[(SCS_SIZE / sizeof(long)) - 1] = SCS_END_MAGIC
 };
-#endif
-
-#ifdef CONFIG_FIVE
-static struct task_integrity init_integrity =
-					INIT_TASK_INTEGRITY(init_integrity);
 #endif
 
 /*
@@ -220,9 +214,14 @@ struct task_struct init_task
 	.android_vendor_data1 = {0, },
 	.android_oem_data1 = {0, },
 #endif
-	INIT_INTEGRITY(init_task)
+	.dmabuf_info = NULL,
 };
 EXPORT_SYMBOL(init_task);
+
+#ifdef CONFIG_GKI_DYNAMIC_TASK_STRUCT_SIZE
+u64 vendor_data_pad[CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX / sizeof(u64)];
+EXPORT_SYMBOL_GPL(vendor_data_pad);
+#endif
 
 /*
  * Initial thread structure. Alignment of this is handled by a special

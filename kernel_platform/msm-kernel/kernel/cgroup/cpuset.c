@@ -193,21 +193,12 @@ struct cpuset {
 };
 
 /*
-* Legacy hierarchy call to cgroup_transfer_tasks() is handled asynchrously
-*/
-
+ * Legacy hierarchy call to cgroup_transfer_tasks() is handled asynchrously
+ */
 struct cpuset_remove_tasks_struct {
 	struct work_struct work;
 	struct cpuset *cs;
 };
-
-/*
- * A flag to force sched domain rebuild at the end of an operation while
- * inhibiting it in the intermediate stages when set. Currently it is only
- * set in hotplug code.
- */
-
-static bool force_sd_rebuild;
 
 /*
  * Partition root states:
@@ -449,7 +440,7 @@ static inline void check_insane_mems_config(nodemask_t *nodes)
 {
 	if (!cpusets_insane_config() &&
 		movable_only_nodes(nodes)) {
-		static_branch_enable(&cpusets_insane_config_key);
+		static_branch_enable_cpuslocked(&cpusets_insane_config_key);
 		pr_info("Unsupported (movable nodes only) cpuset configuration detected (nmask=%*pbl)!\n"
 			"Cpuset allocations might fail even with a lot of memory available.\n",
 			nodemask_pr_args(nodes));
@@ -1259,9 +1250,11 @@ static void update_tasks_cpumask(struct cpuset *cs, struct cpumask *new_cpus)
 
 		if (top_cs) {
 			/*
-			 * Percpu kthreads in top_cpuset are ignored
+			 * PF_NO_SETAFFINITY tasks are ignored.
+			 * All per cpu kthreads should have PF_NO_SETAFFINITY
+			 * flag set, see kthread_set_per_cpu().
 			 */
-			if (kthread_is_per_cpu(task))
+			if (task->flags & PF_NO_SETAFFINITY)
 				continue;
 			cpumask_andnot(new_cpus, possible_mask, cs->subparts_cpus);
 		} else {
@@ -1360,7 +1353,7 @@ static void update_partition_sd_lb(struct cpuset *cs, int old_prs)
 			clear_bit(CS_SCHED_LOAD_BALANCE, &cs->flags);
 	}
 
-	if (rebuild_domains && !force_sd_rebuild)
+	if (rebuild_domains)
 		rebuild_sched_domains_locked();
 }
 
@@ -1619,7 +1612,7 @@ static int update_parent_subparts_cpumask(struct cpuset *cs, int cmd,
 	/*
 	 * For partcmd_update without newmask, it is being called from
 	 * cpuset_handle_hotplug(). Update the load balance flag and
-	 * scheduling domain accordingly..
+	 * scheduling domain accordingly.
 	 */
 	if ((cmd == partcmd_update) && !newmask)
 		update_partition_sd_lb(cs, old_prs);
@@ -1808,8 +1801,7 @@ update_parent_subparts:
 	}
 	rcu_read_unlock();
 
-	if (need_rebuild_sched_domains && !(flags & HIER_NO_SD_REBUILD) &&
-			!force_sd_rebuild)
+	if (need_rebuild_sched_domains && !(flags & HIER_NO_SD_REBUILD))
 		rebuild_sched_domains_locked();
 }
 
@@ -2333,8 +2325,7 @@ static int update_flag(cpuset_flagbits_t bit, struct cpuset *cs,
 	cs->flags = trialcs->flags;
 	spin_unlock_irq(&callback_lock);
 
-	if (!cpumask_empty(trialcs->cpus_allowed) && balance_flag_changed &&
-			!force_sd_rebuild)
+	if (!cpumask_empty(trialcs->cpus_allowed) && balance_flag_changed)
 		rebuild_sched_domains_locked();
 
 	if (spread_flag_changed)
@@ -2690,6 +2681,8 @@ static void cpuset_attach_task(struct cpuset *cs, struct task_struct *task)
 
 	cpuset_change_task_nodemask(task, &cpuset_attach_nodemask_to);
 	cpuset_update_task_spread_flags(cs, task);
+
+	trace_android_vh_cpuset_attach_task(&cs->css, task);
 }
 
 static void cpuset_attach(struct cgroup_taskset *tset)
@@ -3363,6 +3356,7 @@ static int cpuset_css_online(struct cgroup_subsys_state *css)
 out_unlock:
 	mutex_unlock(&cpuset_mutex);
 	cpus_read_unlock();
+	trace_android_vh_cpuset_css_online(css);
 	return 0;
 }
 
@@ -3605,6 +3599,7 @@ static void remove_tasks_in_empty_cpuset(struct cpuset *cs)
 static void cpuset_migrate_tasks_workfn(struct work_struct *work)
 {
 	struct cpuset_remove_tasks_struct *s;
+
 	s = container_of(work, struct cpuset_remove_tasks_struct, work);
 	remove_tasks_in_empty_cpuset(s->cs);
 	css_put(&s->cs->css);
@@ -3643,15 +3638,15 @@ hotplug_update_tasks_legacy(struct cpuset *cs,
 	 * cpuset. Execute it asynchronously using workqueue.
 	 */
 	if (is_empty && cs->css.cgroup->nr_populated_csets &&
-			css_tryget_online(&cs->css)) {
+	    css_tryget_online(&cs->css)) {
 		struct cpuset_remove_tasks_struct *s;
-		
+
 		s = kzalloc(sizeof(*s), GFP_KERNEL);
 		if (WARN_ON_ONCE(!s)) {
 			css_put(&cs->css);
 			return;
 		}
-		
+
 		s->cs = cs;
 		INIT_WORK(&s->work, cpuset_migrate_tasks_workfn);
 		schedule_work(&s->work);
@@ -3680,9 +3675,11 @@ hotplug_update_tasks(struct cpuset *cs,
 		update_tasks_nodemask(cs);
 }
 
+static bool force_rebuild;
+
 void cpuset_force_rebuild(void)
 {
-	force_sd_rebuild = true;
+	force_rebuild = true;
 }
 
 /**
@@ -3856,9 +3853,15 @@ static void cpuset_handle_hotplug(void)
 	cpus_updated = !cpumask_equal(top_cpuset.effective_cpus, &new_cpus);
 	mems_updated = !nodes_equal(top_cpuset.effective_mems, new_mems);
 
+	/*
+	 * In the rare case that hotplug removes all the cpus in subparts_cpus,
+	 * we assumed that cpus are updated.
+	 */
+	if (!cpus_updated && top_cpuset.nr_subparts_cpus)
+		cpus_updated = true;
+
 	/* synchronize cpus_allowed to cpu_active_mask */
 	if (cpus_updated) {
-		cpuset_force_rebuild();
 		spin_lock_irq(&callback_lock);
 		if (!on_dfl)
 			cpumask_copy(top_cpuset.cpus_allowed, &new_cpus);
@@ -3915,8 +3918,8 @@ static void cpuset_handle_hotplug(void)
 	}
 
 	/* rebuild sched domains if cpus_allowed has changed */
-	if (force_sd_rebuild) {
-		force_sd_rebuild = false;
+	if (cpus_updated || force_rebuild) {
+		force_rebuild = false;
 		rebuild_sched_domains_cpuslocked();
 	}
 

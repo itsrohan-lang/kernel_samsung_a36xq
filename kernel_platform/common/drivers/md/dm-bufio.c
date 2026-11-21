@@ -69,6 +69,8 @@
 #define LIST_DIRTY	1
 #define LIST_SIZE	2
 
+#define SCAN_RESCHED_CYCLE	16
+
 /*--------------------------------------------------------------*/
 
 /*
@@ -1918,8 +1920,6 @@ static void *new_read(struct dm_bufio_client *c, sector_t block,
 	if (b->read_error) {
 		int error = blk_status_to_errno(b->read_error);
 
-		DMERR("Buffer I/O error with read_error %u for sector %llu, need_submit %d\n",
-		(u32)b->read_error, block, need_submit);
 		dm_bufio_release(b);
 
 		return ERR_PTR(error);
@@ -2420,7 +2420,12 @@ static void __scan(struct dm_bufio_client *c)
 
 			atomic_long_dec(&c->need_shrink);
 			freed++;
-			cond_resched();
+
+			if (unlikely(freed % SCAN_RESCHED_CYCLE == 0)) {
+				dm_bufio_unlock(c);
+				cond_resched();
+				dm_bufio_lock(c);
+			}
 		}
 	}
 }
@@ -2741,7 +2746,11 @@ static unsigned long __evict_many(struct dm_bufio_client *c,
 		__make_buffer_clean(b);
 		__free_buffer_wake(b);
 
-		cond_resched();
+		if (need_resched()) {
+			dm_bufio_unlock(c);
+			cond_resched();
+			dm_bufio_lock(c);
+		}
 	}
 
 	return count;

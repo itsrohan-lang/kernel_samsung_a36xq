@@ -28,6 +28,33 @@ DECLARE_HOOK(android_vh_f2fs_restore_priority,
 	TP_PROTO(struct task_struct *p, int saved_prio),
 	TP_ARGS(p, saved_prio));
 
+DECLARE_HOOK(android_vh_put_super,
+	TP_PROTO(struct super_block *sb),
+	TP_ARGS(sb));
+
+DECLARE_HOOK(android_vh_ep_create_wakeup_source,
+	TP_PROTO(char *name, int len),
+	TP_ARGS(name, len));
+
+DECLARE_HOOK(android_vh_timerfd_create,
+	TP_PROTO(char *name, int len),
+	TP_ARGS(name, len));
+
+DECLARE_HOOK(android_vh_erofs_iostat_submit,
+	TP_PROTO(struct super_block *sb, struct bio *bio),
+	TP_ARGS(sb, bio));
+
+DECLARE_HOOK(android_vh_erofs_iostat_update,
+	TP_PROTO(struct super_block *sb, struct bio *bio),
+	TP_ARGS(sb, bio));
+
+DECLARE_HOOK(android_vh_f2fs_iostat_submit,
+	TP_PROTO(struct super_block *sb, int type, struct bio *bio),
+	TP_ARGS(sb, type, bio));
+
+DECLARE_HOOK(android_vh_f2fs_iostat_update,
+	TP_PROTO(struct super_block *sb, struct bio *bio, bool *skip),
+	TP_ARGS(sb, bio, skip));
 #endif /* _TRACE_HOOK_FS_H */
 
 /* This part must be outside protection */

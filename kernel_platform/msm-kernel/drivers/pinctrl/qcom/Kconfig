@@ -77,16 +77,6 @@ config PINCTRL_SM6115_LPASS_LPI
 	  Qualcomm Technologies Inc LPASS (Low Power Audio SubSystem) LPI
 	  (Low Power Island) found on the Qualcomm Technologies Inc SM6115 platform.
 
-config PINCTRL_SM6150
-	tristate "Qualcomm Technologies Inc SM6150 pin controller driver"
-	depends on OF
-	depends on PINCTRL_MSM
-	help
-	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
-	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
-	  Technologies Inc SM6150 platform.
-	  Say N, if not sure.
-
 config PINCTRL_SM8250_LPASS_LPI
 	tristate "Qualcomm Technologies Inc SM8250 LPASS LPI pin controller driver"
 	depends on ARM64 || COMPILE_TEST
@@ -133,17 +123,5 @@ config PINCTRL_SM8550_LPASS_LPI
 	  Qualcomm Technologies Inc LPASS (Low Power Audio SubSystem) LPI
 	  (Low Power Island) found on the Qualcomm Technologies Inc SM8550
 	  platform.
-
-config SEC_GPIO_DVS
-	tristate "setting Samsung GPIO debugging and verification system"
-	help
-	  To verify gpio configurations of devices, set this feature.
-	  This feature should be enabled for user-debug mode.
-
-config SEC_GPIO_DUMP
-	bool "Help to check GPIO configuration"
-	help
-	  To debug gpio state, set this feature.
-	  This feature can be enabled for all modes.
 
 endif

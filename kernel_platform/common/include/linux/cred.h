@@ -16,10 +16,6 @@
 #include <linux/sched.h>
 #include <linux/sched/user.h>
 
-#ifdef CONFIG_KDP
-#include <linux/kdp.h>
-#endif
-
 struct cred;
 struct inode;
 
@@ -149,16 +145,6 @@ struct cred {
 	};
 } __randomize_layout;
 
-#ifdef CONFIG_KDP
-struct cred_kdp {
-	struct cred cred;
-	atomic_long_t *use_cnt;
-	struct task_struct *bp_task;
-	void *bp_pgd;
-	unsigned long long type;
-};
-#endif
-
 extern void __put_cred(struct cred *);
 extern void exit_creds(struct task_struct *);
 extern int copy_creds(struct task_struct *, unsigned long);
@@ -194,11 +180,7 @@ static inline bool cap_ambient_invariant_ok(const struct cred *cred)
  */
 static inline struct cred *get_new_cred(struct cred *cred)
 {
-#ifdef CONFIG_KDP
-	kdp_usecount_inc(cred);
-#else
 	atomic_long_inc(&cred->usage);
-#endif
 	return cred;
 }
 
@@ -220,11 +202,7 @@ static inline const struct cred *get_cred(const struct cred *cred)
 	struct cred *nonconst_cred = (struct cred *) cred;
 	if (!cred)
 		return cred;
-#ifdef CONFIG_KDP
-	kdp_set_cred_non_rcu(nonconst_cred, 0);
-#else
 	nonconst_cred->non_rcu = 0;
-#endif
 	return get_new_cred(nonconst_cred);
 }
 
@@ -233,18 +211,9 @@ static inline const struct cred *get_cred_rcu(const struct cred *cred)
 	struct cred *nonconst_cred = (struct cred *) cred;
 	if (!cred)
 		return NULL;
-#ifdef CONFIG_KDP
-	if (!kdp_usecount_inc_not_zero(nonconst_cred))
-		return NULL;
-#else
 	if (!atomic_long_inc_not_zero(&nonconst_cred->usage))
 		return NULL;
-#endif
-#ifdef CONFIG_KDP
-	kdp_set_cred_non_rcu(nonconst_cred, 0);
-#else
 	nonconst_cred->non_rcu = 0;
-#endif
 	return cred;
 }
 
@@ -264,13 +233,8 @@ static inline void put_cred(const struct cred *_cred)
 	struct cred *cred = (struct cred *) _cred;
 
 	if (cred) {
-#ifdef CONFIG_KDP
-		if (kdp_usecount_dec_and_test(cred))
-			__put_cred(cred);
-#else
 		if (atomic_long_dec_and_test(&(cred)->usage))
 			__put_cred(cred);
-#endif
 	}
 }
 

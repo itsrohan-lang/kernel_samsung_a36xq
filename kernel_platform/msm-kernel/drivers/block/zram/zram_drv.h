@@ -18,10 +18,8 @@
 #include <linux/rwsem.h>
 #include <linux/zsmalloc.h>
 #include <linux/crypto.h>
-#include <linux/sec_mm.h>
 
 #include "zcomp.h"
-#include "zram_ext.h"
 
 #define SECTORS_PER_PAGE_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define SECTORS_PER_PAGE	(1 << SECTORS_PER_PAGE_SHIFT)
@@ -30,8 +28,6 @@
 #define ZRAM_SECTOR_PER_LOGICAL_BLOCK	\
 	(1 << (ZRAM_LOGICAL_BLOCK_SHIFT - SECTOR_SHIFT))
 
-#define print_hex_dump_fmt(src, size) \
-	print_hex_dump(KERN_ERR, "", DUMP_PREFIX_OFFSET, 16, 1, src, size, 1)
 
 /*
  * ZRAM is mainly used for memory efficiency so we want to keep memory
@@ -78,27 +74,6 @@ struct zram_table_entry {
 #endif
 };
 
-#ifdef CONFIG_ZRAM_EXT
-enum zram_error_types {
-	ERR_TYPE1,
-	ERR_TYPE2,
-
-	NR_ERR_TYPES,
-};
-#endif
-
-#ifdef CONFIG_ZRAM_PERF_STAT
-#define NR_IO_TYPES 2
-
-struct zram_perf_stat {
-	ktime_t start;
-	atomic64_t nr_io;
-	atomic64_t nr_pages;
-	atomic64_t time;
-	atomic64_t cnt;
-};
-#endif
-
 struct zram_stats {
 	atomic64_t compr_data_size;	/* compressed size of pages stored */
 	atomic64_t failed_reads;	/* can happen when memory is too low */
@@ -115,18 +90,6 @@ struct zram_stats {
 	atomic64_t bd_count;		/* no. of pages in backing device */
 	atomic64_t bd_reads;		/* no. of reads from backing device */
 	atomic64_t bd_writes;		/* no. of writes from backing device */
-#endif
-#ifdef CONFIG_ZRAM_EXT
-	atomic64_t bd_objcnt;
-	atomic64_t bd_size;
-	atomic64_t bd_max_count;
-	atomic64_t bd_max_size;
-	atomic64_t bd_objreads;
-	atomic64_t bd_objwrites;
-	atomic64_t error_count[NR_ERR_TYPES];
-#endif
-#ifdef CONFIG_ZRAM_PERF_STAT
-	struct zram_perf_stat perf_stat[NR_IO_TYPES];
 #endif
 };
 
@@ -176,142 +139,5 @@ struct zram {
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
-#ifdef CONFIG_ZRAM_EXT
-	struct task_struct *prefetchd;
-	struct list_head prefetch_list;
-	struct mutex falloc_lock;
-	struct zram_wb_work **read_work;
-	spinlock_t bitmap_lock;
-	spinlock_t prefetch_lock;
-	spinlock_t read_work_lock;
-	spinlock_t refcount_lock;
-	wait_queue_head_t prefetch_wait;
-	unsigned long *chunk_bitmap;
-	unsigned long *falloc_bitmap;
-	unsigned long *read_bitmap;
-	u16 *refcount_table;
-	atomic_t nr_prefetch;
-#endif
-#ifdef CONFIG_ZRAM_PERF_STAT
-	bool perf_stat_enabled;
-#endif
 };
-
-void zram_free_page(struct zram *zram, size_t index);
-
-static inline int zram_slot_trylock(struct zram *zram, u32 index)
-{
-	return bit_spin_trylock(ZRAM_LOCK, &zram->table[index].flags);
-}
-
-static inline void zram_slot_lock(struct zram *zram, u32 index)
-{
-	bit_spin_lock(ZRAM_LOCK, &zram->table[index].flags);
-}
-
-static inline void zram_slot_unlock(struct zram *zram, u32 index)
-{
-	bit_spin_unlock(ZRAM_LOCK, &zram->table[index].flags);
-}
-
-static inline bool init_done(struct zram *zram)
-{
-	return zram->disksize;
-}
-
-static inline struct zram *dev_to_zram(struct device *dev)
-{
-	return (struct zram *)dev_to_disk(dev)->private_data;
-}
-
-static inline unsigned long zram_get_handle(struct zram *zram, u32 index)
-{
-	return zram->table[index].handle;
-}
-
-static inline void zram_set_handle(struct zram *zram, u32 index, unsigned long handle)
-{
-	zram->table[index].handle = handle;
-}
-
-/* flag operations require table entry bit_spin_lock() being held */
-static inline bool zram_test_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	return zram->table[index].flags & BIT(flag);
-}
-
-static inline void zram_set_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	zram->table[index].flags |= BIT(flag);
-}
-
-static inline void zram_clear_flag(struct zram *zram, u32 index,
-			enum zram_pageflags flag)
-{
-	zram->table[index].flags &= ~BIT(flag);
-}
-
-static inline void zram_set_element(struct zram *zram, u32 index,
-			unsigned long element)
-{
-	zram->table[index].element = element;
-}
-
-static inline unsigned long zram_get_element(struct zram *zram, u32 index)
-{
-	return zram->table[index].element;
-}
-
-static inline size_t zram_get_obj_size(struct zram *zram, u32 index)
-{
-	return zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1);
-}
-
-static inline void zram_set_obj_size(struct zram *zram,
-					u32 index, size_t size)
-{
-	unsigned long flags = zram->table[index].flags >> ZRAM_FLAG_SHIFT;
-
-	zram->table[index].flags = (flags << ZRAM_FLAG_SHIFT) | size;
-}
-
-static inline bool zram_allocated(struct zram *zram, u32 index)
-{
-	return zram_get_obj_size(zram, index) ||
-			zram_test_flag(zram, index, ZRAM_SAME) ||
-			zram_test_flag(zram, index, ZRAM_WB);
-}
-
-static inline void zram_set_priority(struct zram *zram, u32 index, u32 prio)
-{
-	prio &= ZRAM_COMP_PRIORITY_MASK;
-	/*
-	 * Clear previous priority value first, in case if we recompress
-	 * further an already recompressed page
-	 */
-	zram->table[index].flags &= ~(ZRAM_COMP_PRIORITY_MASK <<
-				      ZRAM_COMP_PRIORITY_BIT1);
-	zram->table[index].flags |= (prio << ZRAM_COMP_PRIORITY_BIT1);
-}
-
-static inline u32 zram_get_priority(struct zram *zram, u32 index)
-{
-	u32 prio = zram->table[index].flags >> ZRAM_COMP_PRIORITY_BIT1;
-
-	return prio & ZRAM_COMP_PRIORITY_MASK;
-}
-
-static inline void update_used_max(struct zram *zram,
-					const unsigned long pages)
-{
-	unsigned long cur_max = atomic_long_read(&zram->stats.max_used_pages);
-
-	do {
-		if (cur_max >= pages)
-			return;
-	} while (!atomic_long_try_cmpxchg(&zram->stats.max_used_pages,
-					  &cur_max, pages));
-}
 #endif

@@ -75,8 +75,6 @@ static void reboot_work_fn(struct work_struct *unused)
 	kthread_run(reboot_kthread_fn, NULL, "softdog_reboot");
 }
 
-static struct watchdog_device softdog_dev;
-
 static enum hrtimer_restart softdog_fire(struct hrtimer *timer)
 {
 	static bool soft_reboot_fired;
@@ -86,7 +84,7 @@ static enum hrtimer_restart softdog_fire(struct hrtimer *timer)
 		pr_crit("Triggered - Reboot ignored\n");
 	} else if (soft_panic) {
 		pr_crit("Initiating panic\n");
-		panic("Software Watchdog Timer expired %ds", softdog_dev.timeout);
+		panic("Software Watchdog Timer expired");
 	} else {
 		pr_crit("Initiating system reboot\n");
 		if (!soft_reboot_fired && soft_reboot_cmd != NULL) {
@@ -122,6 +120,8 @@ static enum hrtimer_restart softdog_fire(struct hrtimer *timer)
 
 	return HRTIMER_NORESTART;
 }
+
+static struct watchdog_device softdog_dev;
 
 static enum hrtimer_restart softdog_pretimeout(struct hrtimer *timer)
 {

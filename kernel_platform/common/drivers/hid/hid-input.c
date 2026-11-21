@@ -209,9 +209,6 @@ static int hidinput_setkeycode(struct input_dev *dev,
 		usage->type = EV_KEY;
 		usage->code = ke->keycode;
 
-		if (usage->code > KEY_MAX || *old_keycode > KEY_MAX)
-			return -EINVAL;
-
 		clear_bit(*old_keycode, dev->keybit);
 		set_bit(usage->code, dev->keybit);
 		dbg_hid("Assigned keycode %d to HID usage code %x\n",
@@ -598,14 +595,37 @@ static void hidinput_cleanup_battery(struct hid_device *dev)
 	dev->battery = NULL;
 }
 
-static void hidinput_update_battery(struct hid_device *dev, int value)
+static bool hidinput_update_battery_charge_status(struct hid_device *dev,
+						  unsigned int usage, int value)
+{
+	switch (usage) {
+	case HID_BAT_CHARGING:
+		dev->battery_charge_status = value ?
+					     POWER_SUPPLY_STATUS_CHARGING :
+					     POWER_SUPPLY_STATUS_DISCHARGING;
+		return true;
+	}
+
+	return false;
+}
+
+static void hidinput_update_battery(struct hid_device *dev, unsigned int usage,
+				    int value)
 {
 	int capacity;
 
 	if (!dev->battery)
 		return;
 
-	if (value == 0 || value < dev->battery_min || value > dev->battery_max)
+	if (hidinput_update_battery_charge_status(dev, usage, value)) {
+		power_supply_changed(dev->battery);
+		return;
+	}
+
+	if ((usage & HID_USAGE_PAGE) == HID_UP_DIGITIZER && value == 0)
+		return;
+
+	if (value < dev->battery_min || value > dev->battery_max)
 		return;
 
 	capacity = hidinput_scale_battery_capacity(dev, value);
@@ -620,21 +640,6 @@ static void hidinput_update_battery(struct hid_device *dev, int value)
 		power_supply_changed(dev->battery);
 	}
 }
-
-static bool hidinput_set_battery_charge_status(struct hid_device *dev,
-					       unsigned int usage, int value)
-{
-	switch (usage) {
-	case HID_BAT_CHARGING:
-		dev->battery_charge_status = value ?
-					     POWER_SUPPLY_STATUS_CHARGING :
-					     POWER_SUPPLY_STATUS_DISCHARGING;
-		power_supply_changed(dev->battery);
-		return true;
-	}
-
-	return false;
-}
 #else  /* !CONFIG_HID_BATTERY_STRENGTH */
 static int hidinput_setup_battery(struct hid_device *dev, unsigned report_type,
 				  struct hid_field *field, bool is_percentage)
@@ -646,14 +651,9 @@ static void hidinput_cleanup_battery(struct hid_device *dev)
 {
 }
 
-static void hidinput_update_battery(struct hid_device *dev, int value)
+static void hidinput_update_battery(struct hid_device *dev, unsigned int usage,
+				    int value)
 {
-}
-
-static bool hidinput_set_battery_charge_status(struct hid_device *dev,
-					       unsigned int usage, int value)
-{
-	return false;
 }
 #endif	/* CONFIG_HID_BATTERY_STRENGTH */
 
@@ -1519,11 +1519,7 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		return;
 
 	if (usage->type == EV_PWR) {
-		bool handled = hidinput_set_battery_charge_status(hid, usage->hid, value);
-
-		if (!handled)
-			hidinput_update_battery(hid, value);
-
+		hidinput_update_battery(hid, usage->hid, value);
 		return;
 	}
 
@@ -1883,7 +1879,6 @@ static void hidinput_close(struct input_dev *dev)
 	hid_hw_close(hid);
 }
 
-#if 0
 static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
 		struct hid_report *report, bool use_logical_max)
 {
@@ -1964,7 +1959,6 @@ static void hidinput_change_resolution_multipliers(struct hid_device *hid)
 	/* refresh our structs */
 	hid_setup_resolution_multiplier(hid);
 }
-#endif
 
 static void report_features(struct hid_device *hid)
 {
@@ -2330,7 +2324,7 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 		}
 	}
 
-	//hidinput_change_resolution_multipliers(hid);
+	hidinput_change_resolution_multipliers(hid);
 
 	list_for_each_entry_safe(hidinput, next, &hid->inputs, list) {
 		if (drv->input_configured &&

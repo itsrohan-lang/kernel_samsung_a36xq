@@ -49,6 +49,8 @@
 
 #include "rcu.h"
 
+EXPORT_TRACEPOINT_SYMBOL_GPL(rcu_stall_warning);
+
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
 #endif
@@ -595,8 +597,7 @@ EXPORT_SYMBOL_GPL(do_trace_rcu_torture_read);
 	do { } while (0)
 #endif
 
-#if IS_ENABLED(CONFIG_RCU_TORTURE_TEST) || IS_MODULE(CONFIG_RCU_TORTURE_TEST) \
-	|| IS_ENABLED(CONFIG_GKI_HIDDEN_RCUTORTURE)
+#if IS_ENABLED(CONFIG_RCU_TORTURE_TEST) || IS_MODULE(CONFIG_RCU_TORTURE_TEST)
 /* Get rcutorture access to sched_setaffinity(). */
 long rcutorture_sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 {

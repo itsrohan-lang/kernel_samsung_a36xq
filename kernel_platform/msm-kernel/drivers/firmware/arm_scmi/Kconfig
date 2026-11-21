@@ -55,6 +55,20 @@ config ARM_SCMI_RAW_MODE_SUPPORT_COEX
 	  operate normally, thing which could make an SCMI test suite using the
 	  SCMI Raw mode support unreliable. If unsure, say N.
 
+config ARM_SCMI_DEBUG_COUNTERS
+	bool "Enable SCMI communication debug metrics tracking"
+	select ARM_SCMI_NEED_DEBUGFS
+	depends on DEBUG_FS
+	default n
+	help
+	  Enables tracking of some key communication metrics for debug
+	  purposes. It may track metrics like how many messages were sent
+	  or received, were there any failures, what kind of failures, ..etc.
+
+	  Enable this option to create a new debugfs directory which contains
+	  such useful debug counters. This can be helpful for debugging and
+	  SCMI monitoring.
+
 config ARM_SCMI_HAVE_TRANSPORT
 	bool
 	help
@@ -165,52 +179,6 @@ config ARM_SCMI_TRANSPORT_VIRTIO_ATOMIC_ENABLE
 	  transport to optionally ask for atomic SCMI transactions and operate
 	  in atomic context too, at the price of using a number of busy-waiting
 	  primitives all over instead. If unsure say N.
-
-config QTI_SCMI_PMU_PROTOCOL
-	tristate "Qualcomm Technologies, Inc. SCMI PMU vendor Protocol"
-	depends on ARM || ARM64 || COMPILE_TEST
-	depends on ARM_SCMI_PROTOCOL && QCOM_CPUCP
-	help
-	  System Control and Management Interface (SCMI) pmu vendor protocol.
-	  This protocol provides interface to communicate with micro controller
-	  which maintains the PMU configuration for multiple clients.
-
-	  This driver defines the commands or message ID's used for this
-	  communication and also exposes the ops used by clients.
-
-config QTI_SCMI_VENDOR_PROTOCOL
-	tristate "Qualcomm Technologies, Inc. Qcom SCMI vendor Protocol"
-	depends on ARM || ARM64 || COMPILE_TEST
-	depends on ARM_SCMI_PROTOCOL && QCOM_CPUCP
-	help
-	  System Control and Management Interface (SCMI) Qcom vendor protocol.
-	  This protocol provides interface to communicate with micro controller.
-
-	  This driver defines the commands or message ID's used for this
-	  communication and also exposes the ops used by clients.
-
-config QTI_SCMI_C1DCVS_PROTOCOL
-	tristate "Qualcomm Technologies, Inc. SCMI C1DCVS vendor Protocol"
-	depends on ARM || ARM64 || COMPILE_TEST
-	depends on ARM_SCMI_PROTOCOL && QCOM_CPUCP
-	help
-	  System Control and Management Interface (SCMI) c1dcvs vendor protocol.
-	  This protocol provides interface to communicate with micro controller
-	  which maintains the c1dcvs algorithm.
-
-	  This driver defines the comands or message ID's used for this
-	  communication and also exposes the ops used by clients.
-
-config QTI_SCMI_PLH_PROTOCOL
-	tristate "Qualcomm Technologies, Inc. SCMI PLH vendor Protocol"
-	depends on ARM_SCMI_PROTOCOL && QCOM_CPUCP
-	help
-	  System Control and Management Interface (SCMI) plh vendor protocol
-	  this protocol provides interface to communicate with micro controller
-	  which is executing the plh algorithm.
-
-	  This driver defines the comands or message ID's used for this
-	  communication and also exposes the ops used by clients.
 
 endif #ARM_SCMI_PROTOCOL
 

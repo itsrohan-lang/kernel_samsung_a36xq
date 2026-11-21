@@ -1,6 +1,14 @@
 # Kernel Tree for Samsung Galaxy A36 5G (SM-A366E / a36xq)
 
-This repository contains the kernel configuration, module definitions, and build scripts for the **Samsung Galaxy A36 5G (SM-A366E / a36xq)**.
+This repository contains the reconstructed kernel source, configuration, module
+definitions, and build scripts for the **Samsung Galaxy A36 5G
+(SM-A366E / a36xq)**.
+
+> **Important:** Samsung has not published an Android 17 open-source archive for
+> `A366EXXUCDZIF`. The GKI trees here are rebuilt from the matching AOSP GKI
+> `6.6.118` tag. This is a source-compatible reconstruction for validation and
+> header generation, not a bit-for-bit Samsung release. See
+> [`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md) for exact provenance.
 
 ---
 
@@ -10,72 +18,69 @@ This repository contains the kernel configuration, module definitions, and build
 | :--- | :--- |
 | **Linux Version** | `6.6.118-android15` |
 | **Kernel Build String** | `Linux version 6.6.118-android15-8-34442516-user-abA366EXXUCDZIF-4k` |
-| **Architecture** | `arm64` (4KB page size) |
-| **Compiler** | Android Clang 18.0.0 (`r510928`), LLD 18.0.0 |
+| **Architecture** | `arm64` (4 KB page size) |
+| **Compiler used by Samsung** | Android Clang 18.0.0 (`r510928`), LLD 18.0.0 |
 | **SoC Platform** | Qualcomm Snapdragon (`parrot` / SM6450) |
-| **GKI Architecture** | Android 15 GKI 2.0 (Generic Kernel Image) |
+| **GKI Architecture** | Android 15 GKI 2.0 |
+| **GKI baseline** | `android15-6.6-2026-01_r42` / `443a198f58bf` |
 | **Stock Defconfig** | `arch/arm64/configs/a36xq_defconfig` |
 
 ---
 
 ## Architecture: GKI & Dynamic Modules (DLKM)
 
-Modern Samsung devices running Android 14/15 use Google's **Generic Kernel Image (GKI)** architecture:
-
-1. **Generic Kernel Image (`Image`)**:
-   * A unified generic Linux 6.6 kernel provided by Google.
-   * Does not contain device-specific SoC or board drivers.
-2. **Device Trees (`dtb.img` & `dtbo.img`)**:
-   * Prebuilt DTB (`dtb.img`) contains Qualcomm `parrot` (SM6450) hardware device trees.
-   * Prebuilt DTBO (`dtbo.img`) contains Samsung panel, board, and sensor overlays.
-3. **Vendor DLKM Modules (`vendor_dlkm`)**:
-   * All hardware-specific drivers are compiled as loadable kernel modules (`.ko`):
-     * **GPU:** `msm_kgsl.ko`, `governor_msm_adreno_tz.ko`
-     * **Display:** `msm_drm.ko`, `sec_panel_notifier_v2.ko`
-     * **Camera:** `camera.ko`, `camcc-parrot.ko`
-     * **Audio:** `wcd938x_dlkm.ko`, `wsa883x_dlkm.ko`, `tfa9878_dlkm.ko`
-     * **Wi-Fi / BT:** `qca_cld3_adrastea.ko`, `cnss_utils.ko`, `btpower.ko`
-     * **Battery & Power:** `s2mf301_charger.ko`, `sec-battery.ko`, `sec-direct-charger.ko`
-     * **Touchscreen:** `goodix_ts_berlin.ko`, `sec_input_notifier.ko`
-     * **Fingerprint:** `fingerprint.ko`
+1. **Generic Kernel Image (`Image`)**
+   * AOSP GKI 6.6.118 baseline with `CONFIG_LOCALVERSION="-4k"`.
+2. **Device Trees (`dtb.img` & `dtbo.img`)**
+   * Prebuilt DTB/DTBO from the stock firmware are used by the ROM.
+3. **Vendor DLKM modules**
+   * Qualcomm/Samsung techpack sources are kept under `vendor/qcom/opensource`.
 
 ---
 
-## How to Use with Custom ROMs
+## Using this tree with the ROM
 
-### Option 1: Use Prebuilt GKI Kernel (Recommended)
-Because the Samsung Galaxy A36 5G uses standard GKI 2.0:
-* The prebuilt `kernel` (`Image`), `dtb.img`, `dtbo.img`, and module sets are already archived in:
-  * `device/samsung/a36xq/prebuilts/`
-* In [`BoardConfig.mk`](../device_samsung_a36xq/BoardConfig.mk):
-  ```make
-  TARGET_FORCE_PREBUILT_KERNEL := true
-  TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilts/kernel
-  TARGET_PREBUILT_DTB := $(DEVICE_PATH)/prebuilts/dtb.img
-  BOARD_PREBUILT_DTBOIMAGE := $(DEVICE_PATH)/prebuilts/dtbo.img
-  ```
-This allows building and booting LineageOS/AOSP immediately without having to set up a 40 GB Bazel/Kleaf build environment.
+### Option 1: Use the prebuilt GKI kernel (recommended)
 
----
+The boot image ships Samsung's stock kernel, DTB and DTBO:
 
-### Option 2: Build GKI Kernel from Source (Google Common)
-To build a custom GKI kernel:
-```bash
-# Initialize Google Android 15 common kernel repo
-repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6
-repo sync -j$(nproc)
-
-# Build using Bazel / Kleaf
-tools/bazel run //common:kernel_aarch64_dist
+```make
+TARGET_NO_KERNEL_OVERRIDE := true
+PRODUCT_COPY_FILES += $(DEVICE_PATH)/prebuilts/kernel:kernel
 ```
-Copy the resulting `Image` into `device/samsung/a36xq/prebuilts/kernel`.
+
+This remains the authoritative path for booting.
+
+### Option 2: Build/check the GKI kernel from source
+
+```bash
+./build_kernel.sh
+```
+
+The script builds `kernel_platform/common` with `gki_defconfig` and produces:
+
+```text
+out/arch/arm64/boot/Image
+```
+
+Set `CLANG_PATH` to a directory containing `bin/clang` if the script cannot
+find a toolchain automatically.
+
+### Option 3: Exact Samsung Android 17 source
+
+Not available. Do not substitute the Android 16 `*_16_Opensource.zip` archive
+and call it an Android 17 source; it contains kernel `6.6.77`.
 
 ---
 
-### Option 3: Full Kernel Source from Samsung Open Source
-To build the complete kernel including out-of-tree Samsung & Qualcomm modules:
-1. Visit [opensource.samsung.com](https://opensource.samsung.com).
-2. Search for model **`SM-A366E`** (Build: `A366EXXUCDZIF`).
-3. Download and extract the source archive into `kernel/samsung/a36xq`.
-4. Apply [`a36xq_defconfig`](arch/arm64/configs/a36xq_defconfig).
-5. Compile using Kleaf or `./build_kernel.sh`.
+## Retained UAPI fixes
+
+These fixes are required by the ROM's `generated_kernel_includes` action:
+
+* `.find-ignore` prevents duplicate Soong module discovery.
+* `linux/sched/types.h` is excluded from exported UAPI headers.
+* `asm/ptrace.h` and `asm/sigcontext.h` are excluded from exported AArch64 UAPI headers.
+* `include/uapi/audio/**` and `include/uapi/display/**` are mirrored for vendor modules.
+
+Because the exported UAPI header set changed from `6.6.77` to `6.6.118`, the
+device tree's `A36XQ_KERNEL_UAPI_REV` must be bumped.

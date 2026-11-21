@@ -24,6 +24,9 @@
 #include <linux/sched/sysctl.h>
 #include <linux/sched/topology.h>
 #include <linux/sched/signal.h>
+#ifndef __GENKSYMS__
+#include <linux/suspend.h>
+#endif
 #include <linux/delay.h>
 #include <linux/crash_dump.h>
 #include <linux/prefetch.h>
@@ -31,6 +34,7 @@
 #include <linux/part_stat.h>
 
 #include <trace/events/block.h>
+#include <trace/hooks/blk.h>
 
 #include <trace/hooks/blk.h>
 
@@ -718,14 +722,6 @@ static void __blk_mq_free_request(struct request *rq)
 		blk_mq_put_tag(hctx->tags, ctx, rq->tag);
 	if (sched_tag != BLK_MQ_NO_TAG)
 		blk_mq_put_tag(hctx->sched_tags, ctx, sched_tag);
-
-	if (!__blk_mq_active_requests(hctx)) {
-		if (rq->tag != BLK_MQ_NO_TAG)
-			blk_mq_tag_wakeup_all(hctx->tags, false);
-		if (sched_tag != BLK_MQ_NO_TAG)
-			blk_mq_tag_wakeup_all(hctx->sched_tags, false);
-	}
-
 	blk_mq_sched_restart(hctx);
 	blk_queue_exit(q);
 }
@@ -1189,19 +1185,13 @@ static inline bool blk_mq_complete_need_ipi(struct request *rq)
 	return cpu_online(rq->mq_ctx->cpu);
 }
 
-static int blk_mq_complete_send_ipi(struct request *rq)
+static void blk_mq_complete_send_ipi(struct request *rq)
 {
 	unsigned int cpu;
-	int ret = 0;
 
 	cpu = rq->mq_ctx->cpu;
-	if (llist_add(&rq->ipi_list, &per_cpu(blk_cpu_done, cpu))) {
-		ret = smp_call_function_single_async(cpu, &per_cpu(blk_cpu_csd, cpu));
-		if (ret)
-			llist_del_first(&per_cpu(blk_cpu_done, cpu));
-	}
-
-	return ret;
+	if (llist_add(&rq->ipi_list, &per_cpu(blk_cpu_done, cpu)))
+		smp_call_function_single_async(cpu, &per_cpu(blk_cpu_csd, cpu));
 }
 
 static void blk_mq_raise_softirq(struct request *rq)
@@ -1229,9 +1219,10 @@ bool blk_mq_complete_request_remote(struct request *rq)
 	     rq->cmd_flags & REQ_POLLED)
 		return false;
 
-	if (blk_mq_complete_need_ipi(rq))
-		if (!blk_mq_complete_send_ipi(rq))
-			return true;
+	if (blk_mq_complete_need_ipi(rq)) {
+		blk_mq_complete_send_ipi(rq);
+		return true;
+	}
 
 	if (rq->q->nr_hw_queues == 1) {
 		blk_mq_raise_softirq(rq);
@@ -3044,6 +3035,8 @@ void blk_mq_submit_bio(struct bio *bio)
 	unsigned int nr_segs = 1;
 	blk_status_t ret;
 
+	trace_android_vh_check_set_ioprio(bio);
+
 	bio = blk_queue_bounce(bio, q);
 
 	if (plug) {
@@ -3555,11 +3548,13 @@ struct rq_iter_data {
 static bool blk_mq_has_request(struct request *rq, void *data)
 {
 	struct rq_iter_data *iter_data = data;
+	bool ret = false;
 
 	if (rq->mq_hctx != iter_data->hctx)
 		return true;
 	iter_data->has_rq = true;
-	return false;
+	trace_android_rvh_blk_mq_has_request(iter_data->hctx, rq, &ret);
+	return ret;
 }
 
 static bool blk_mq_hctx_has_requests(struct blk_mq_hw_ctx *hctx)
@@ -3588,6 +3583,7 @@ static int blk_mq_hctx_notify_offline(unsigned int cpu, struct hlist_node *node)
 {
 	struct blk_mq_hw_ctx *hctx = hlist_entry_safe(node,
 			struct blk_mq_hw_ctx, cpuhp_online);
+	int ret = 0;
 
 	if (!cpumask_test_cpu(cpu, hctx->cpumask) ||
 	    !blk_mq_last_cpu_in_hctx(cpu, hctx))
@@ -3609,12 +3605,24 @@ static int blk_mq_hctx_notify_offline(unsigned int cpu, struct hlist_node *node)
 	 * frozen and there are no requests.
 	 */
 	if (percpu_ref_tryget(&hctx->queue->q_usage_counter)) {
-		while (blk_mq_hctx_has_requests(hctx))
+		while (blk_mq_hctx_has_requests(hctx)) {
+			/*
+			 * The wakeup capable IRQ handler of block device is
+			 * not called during suspend. Skip the loop by checking
+			 * pm_wakeup_pending to prevent the deadlock and improve
+			 * suspend latency.
+			 */
+			if (pm_wakeup_pending()) {
+				clear_bit(BLK_MQ_S_INACTIVE, &hctx->state);
+				ret = -EBUSY;
+				break;
+			}
 			msleep(5);
+		}
 		percpu_ref_put(&hctx->queue->q_usage_counter);
 	}
 
-	return 0;
+	return ret;
 }
 
 static int blk_mq_hctx_notify_online(unsigned int cpu, struct hlist_node *node)

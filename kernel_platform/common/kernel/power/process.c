@@ -39,6 +39,7 @@ static int try_to_freeze_tasks(bool user_only)
 	unsigned int elapsed_msecs;
 	bool wakeup = false;
 	int sleep_usecs = USEC_PER_MSEC;
+	bool todo_logging_on = false;
 
 	pr_info("Freezing %s\n", what);
 
@@ -88,11 +89,9 @@ static int try_to_freeze_tasks(bool user_only)
 	elapsed_msecs = ktime_to_ms(elapsed);
 
 	if (wakeup) {
-		pr_cont("\n");
 		pr_err("Freezing %s aborted after %d.%03d seconds\n", what,
 		       elapsed_msecs / 1000, elapsed_msecs % 1000);
 	} else if (todo) {
-		pr_cont("\n");
 		pr_err("Freezing %s failed after %d.%03d seconds "
 		       "(%d tasks refusing to freeze, wq_busy=%d):\n", what,
 		       elapsed_msecs / 1000, elapsed_msecs % 1000,
@@ -101,7 +100,8 @@ static int try_to_freeze_tasks(bool user_only)
 		if (wq_busy)
 			show_freezable_workqueues();
 
-		if (pm_debug_messages_on) {
+		trace_android_vh_try_to_freeze_todo_logging(&todo_logging_on);
+		if (pm_debug_messages_on || todo_logging_on) {
 			read_lock(&tasklist_lock);
 			for_each_process_thread(g, p) {
 				if (p != current && freezing(p) && !frozen(p)) {
@@ -114,7 +114,7 @@ static int try_to_freeze_tasks(bool user_only)
 
 		trace_android_vh_try_to_freeze_todo(todo, elapsed_msecs, wq_busy);
 	} else {
-		pr_cont("Freezing %s completed (elapsed %d.%03d seconds)\n",
+		pr_info("Freezing %s completed (elapsed %d.%03d seconds)\n",
 			what, elapsed_msecs / 1000, elapsed_msecs % 1000);
 	}
 
@@ -132,11 +132,9 @@ int freeze_processes(void)
 {
 	int error;
 
-	pr_info("Disabling usermodehelper ... ");
 	error = __usermodehelper_disable(UMH_FREEZING);
 	if (error)
 		return error;
-	pr_cont("done.\n");
 
 	/* Make sure this task doesn't get frozen */
 	current->flags |= PF_SUSPEND_TASK;

@@ -95,19 +95,11 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	if (!fi)
 		return NULL;
 
-	fi->i_time = 0;
-	fi->inval_mask = ~0;
-#ifdef CONFIG_FUSE_BPF
-	fi->backing_inode = NULL;
-	fi->bpf = NULL;
-#endif
+	/* Initialize private data (i.e. everything except fi->inode) */
+	BUILD_BUG_ON(offsetof(struct fuse_inode, inode) != 0);
+	memset((void *) fi + sizeof(fi->inode), 0, sizeof(*fi) - sizeof(fi->inode));
 
-	fi->nodeid = 0;
-	fi->nlookup = 0;
-	fi->attr_version = 0;
-	fi->orig_ino = 0;
-	fi->state = 0;
-	fi->submount_lookup = NULL;
+	fi->inval_mask = ~0;
 	mutex_init(&fi->mutex);
 	spin_lock_init(&fi->lock);
 	fi->forget = fuse_alloc_forget();
@@ -521,16 +513,15 @@ struct inode *fuse_iget_backing(struct super_block *sb, u64 nodeid,
 	if (!inode)
 		return NULL;
 
+	fi = get_fuse_inode(inode);
 	if ((inode->i_state & I_NEW)) {
 		inode->i_flags |= S_NOATIME;
 		if (!fc->writeback_cache)
 			inode->i_flags |= S_NOCMTIME;
-		fuse_init_common(inode);
+		fuse_init_inode(inode, &attr, fc);
 		unlock_new_inode(inode);
 	}
 
-	fi = get_fuse_inode(inode);
-	fuse_init_inode(inode, &attr, fc);
 	spin_lock(&fi->lock);
 	fi->nlookup++;
 	spin_unlock(&fi->lock);
@@ -792,7 +783,7 @@ static void fuse_sync_fs_writes(struct fuse_conn *fc)
 	 */
 	atomic_dec(&bucket->count);
 
-	fuse_wait_event(bucket->waitq, atomic_read(&bucket->count) == 0);
+	wait_event(bucket->waitq, atomic_read(&bucket->count) == 0);
 
 	/* Drop temp count on descendant bucket */
 	fuse_sync_bucket_dec(new_bucket);
@@ -979,11 +970,19 @@ static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
 		}
 		break;
 
-	case OPT_ROOT_DIR:
-		ctx->root_dir = fget(result.uint_32);
-		if (!ctx->root_dir)
+	case OPT_ROOT_DIR: {
+		struct file *rd = fget(result.uint_32);
+
+		if (!rd)
 			return invalfc(fsc, "Unable to open root directory");
+		if (rd->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC ||
+		    rd->f_inode->i_sb->s_stack_depth >= FILESYSTEM_MAX_STACK_DEPTH) {
+			fput(rd);
+			return invalfc(fsc, "Invalid root directory (FUSE or too deep)");
+		}
+		ctx->root_dir = rd;
 		break;
+	}
 
 	case OPT_NO_DAEMON:
 		ctx->no_daemon = true;
@@ -1130,7 +1129,6 @@ void fuse_conn_put(struct fuse_conn *fc)
 			WARN_ON(atomic_read(&bucket->count) != 1);
 			kfree(bucket);
 		}
-		fuse_daemon_watchdog_stop(fc);
 		call_rcu(&fc->rcu, delayed_release);
 	}
 }
@@ -1516,11 +1514,6 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 		fc->conn_error = 1;
 	}
 
-	ST_LOG("<%s> dev = %u:%u  fuse Initialized",
-			__func__, MAJOR(fc->dev), MINOR(fc->dev));
-
-	fuse_daemon_watchdog_start(fc);
-
 	fuse_set_initialized(fc);
 	wake_up_all(&fc->blocked_waitq);
 }
@@ -1710,9 +1703,6 @@ static void fuse_sb_defaults(struct super_block *sb)
 	sb->s_time_gran = 1;
 	sb->s_export_op = &fuse_export_operations;
 	sb->s_iflags |= SB_I_IMA_UNVERIFIABLE_SIGNATURE;
-#ifdef CONFIG_FREEZABLE_IN_LOOKUP
-	sb->s_iflags |= SB_I_FREEZABLE_IN_LOOKUP;
-#endif
 	if (sb->s_user_ns != &init_user_ns)
 		sb->s_iflags |= SB_I_UNTRUSTED_MOUNTER;
 	sb->s_flags &= ~(SB_NOSEC | SB_I_VERSION);
@@ -1885,7 +1875,10 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 	fc->no_control = ctx->no_control;
 	fc->no_force_umount = ctx->no_force_umount;
 	fc->no_daemon = ctx->no_daemon;
-
+#ifdef CONFIG_FUSE_BPF
+	if (ctx->root_dir)
+		fm->sb->s_stack_depth = ctx->root_dir->f_inode->i_sb->s_stack_depth + 1;
+#endif
 	err = -ENOMEM;
 	root = fuse_get_root_inode(sb, ctx->rootmode, ctx->root_bpf,
 				   ctx->root_dir);

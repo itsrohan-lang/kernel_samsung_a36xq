@@ -10,12 +10,26 @@
 #include <linux/f2fs_fs.h>
 #include <linux/sched/signal.h>
 #include <linux/unicode.h>
-#include <linux/iversion.h>
 #include "f2fs.h"
 #include "node.h"
 #include "acl.h"
 #include "xattr.h"
 #include <trace/events/f2fs.h>
+
+static inline bool f2fs_should_fallback_to_linear(struct inode *dir)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(dir);
+
+	switch (f2fs_get_lookup_mode(sbi)) {
+	case LOOKUP_PERF:
+		return false;
+	case LOOKUP_COMPAT:
+		return true;
+	case LOOKUP_AUTO:
+		return !sb_no_casefold_compat_fallback(sbi->sb);
+	}
+	return false;
+}
 
 #if IS_ENABLED(CONFIG_UNICODE)
 extern struct kmem_cache *f2fs_cf_name_slab;
@@ -410,7 +424,8 @@ start_find_entry:
 
 out:
 #if IS_ENABLED(CONFIG_UNICODE)
-	if (IS_CASEFOLDED(dir) && !de && use_hash) {
+	if (f2fs_should_fallback_to_linear(dir) &&
+		IS_CASEFOLDED(dir) && !de && use_hash) {
 		use_hash = false;
 		goto start_find_entry;
 	}
@@ -1108,9 +1123,6 @@ static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 		goto out_free;
 	}
 
-	if (!inode_eq_iversion(inode, file->f_version))
-		file->f_version = inode_query_iversion(inode);
-
 	for (; n < npages; ctx->pos = n * NR_DENTRY_IN_BLOCK) {
 		pgoff_t next_pgofs;
 
@@ -1145,14 +1157,6 @@ static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 		err = f2fs_fill_dentries(ctx, &d,
 				n * NR_DENTRY_IN_BLOCK, &fstr);
 		if (err) {
-			struct f2fs_sb_info *sbi = F2FS_P_SB(dentry_page);
-
-			if (err == -EINVAL) {
-				print_block_data(sbi, n,
-					page_address(dentry_page), 0, F2FS_BLKSIZE);
-				f2fs_bug_on(sbi, 1);
-			}
-
 			f2fs_put_page(dentry_page, 0);
 			break;
 		}

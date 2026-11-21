@@ -1864,8 +1864,7 @@ static int smsc95xx_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 			}
 		} else {
 			/* ETH_FRAME_LEN + 4(CRC) + 2(COE) + 4(Vlan) */
-			if (unlikely(size > (MAX_SINGLE_PACKET_SIZE + ETH_HLEN + 12) ||
-				     size > skb->len)) {
+			if (unlikely(size > (ETH_FRAME_LEN + 12))) {
 				netif_dbg(dev, rx_err, dev->net,
 					  "size err header=0x%08x\n", header);
 				return 0;

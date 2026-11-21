@@ -1,5 +1,0 @@
-config SEC_PM
-	bool "Samsung PowerManagement Feature"
-	default y
-	help
-	  Samsung PowerManagement Feature.

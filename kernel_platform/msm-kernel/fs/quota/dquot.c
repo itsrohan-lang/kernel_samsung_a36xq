@@ -163,13 +163,15 @@ static struct quota_module_name module_names[] = INIT_QUOTA_MODULE_NAMES;
 /* SLAB cache for dquot structures */
 static struct kmem_cache *dquot_cachep;
 
-int register_quota_format(struct quota_format_type *fmt)
+/* workqueue for work quota_release_work*/
+static struct workqueue_struct *quota_unbound_wq;
+
+void register_quota_format(struct quota_format_type *fmt)
 {
 	spin_lock(&dq_list_lock);
 	fmt->qf_next = quota_formats;
 	quota_formats = fmt;
 	spin_unlock(&dq_list_lock);
-	return 0;
 }
 EXPORT_SYMBOL(register_quota_format);
 
@@ -271,7 +273,6 @@ static int __dquot_initialize(struct inode *inode, int type);
 
 static void quota_release_workfn(struct work_struct *work);
 static DECLARE_DELAYED_WORK(quota_release_work, quota_release_workfn);
-static struct workqueue_struct *quota_release_wq;
 
 static inline unsigned int
 hashfn(const struct super_block *sb, struct kqid qid)
@@ -893,7 +894,7 @@ void dqput(struct dquot *dquot)
 	put_releasing_dquots(dquot);
 	atomic_dec(&dquot->dq_count);
 	spin_unlock(&dq_list_lock);
-	queue_delayed_work(quota_release_wq, &quota_release_work, 1);
+	queue_delayed_work(quota_unbound_wq, &quota_release_work, 1);
 }
 EXPORT_SYMBOL(dqput);
 
@@ -3022,11 +3023,6 @@ static int __init dquot_init(void)
 				SLAB_MEM_SPREAD|SLAB_PANIC),
 			NULL);
 
-	quota_release_wq = alloc_workqueue("quota_release_wq",
-				WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
-	if (!quota_release_wq)
-		panic("Cannot create quota_release workqueue");
-
 	order = 0;
 	dquot_hash = (struct hlist_head *)__get_free_pages(GFP_KERNEL, order);
 	if (!dquot_hash)
@@ -3052,6 +3048,11 @@ static int __init dquot_init(void)
 
 	if (register_shrinker(&dqcache_shrinker, "dquota-cache"))
 		panic("Cannot register dquot shrinker");
+
+	quota_unbound_wq = alloc_workqueue("quota_events_unbound",
+					   WQ_UNBOUND | WQ_MEM_RECLAIM, WQ_MAX_ACTIVE);
+	if (!quota_unbound_wq)
+		panic("Cannot create quota_unbound_wq\n");
 
 	return 0;
 }

@@ -437,8 +437,6 @@ void *__unflatten_device_tree(const void *blob,
 	return mem;
 }
 
-EXPORT_SYMBOL_GPL(__unflatten_device_tree);
-
 static void *kernel_tree_alloc(u64 size, u64 align)
 {
 	return kzalloc(size, GFP_KERNEL);

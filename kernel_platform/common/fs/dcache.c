@@ -1861,6 +1861,8 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 	__dget_dlock(parent);
 	dentry->d_parent = parent;
 	list_add(&dentry->d_child, &parent->d_subdirs);
+	if (parent->d_flags & DCACHE_DISCONNECTED)
+		dentry->d_flags |= DCACHE_DISCONNECTED;
 	spin_unlock(&parent->d_lock);
 
 	return dentry;
@@ -2622,19 +2624,11 @@ static inline void end_dir_add(struct inode *dir, unsigned int n,
 
 static void d_wait_lookup(struct dentry *dentry)
 {
-	unsigned long state = TASK_UNINTERRUPTIBLE;
-
 	if (d_in_lookup(dentry)) {
 		DECLARE_WAITQUEUE(wait, current);
-
-#ifdef CONFIG_FREEZABLE_IN_LOOKUP
-		if (dentry->d_sb->s_iflags & SB_I_FREEZABLE_IN_LOOKUP)
-			state |= TASK_FREEZABLE;
-#endif
-
 		add_wait_queue(dentry->d_wait, &wait);
 		do {
-			set_current_state(state);
+			set_current_state(TASK_UNINTERRUPTIBLE);
 			spin_unlock(&dentry->d_lock);
 			schedule();
 			spin_lock(&dentry->d_lock);

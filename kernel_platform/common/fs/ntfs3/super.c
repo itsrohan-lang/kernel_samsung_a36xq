@@ -60,7 +60,6 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/statfs.h>
-#include <linux/fat_common.h>
 
 #include "debug.h"
 #include "ntfs.h"
@@ -91,8 +90,7 @@ void ntfs_printk(const struct super_block *sb, const char *fmt, ...)
 	level = printk_get_level(fmt);
 	vaf.fmt = printk_skip_level(fmt);
 	vaf.va = &args;
-	printk("%c%cntfs3: (%s[%d:%d]): %pV\n", KERN_SOH_ASCII, level,
-	       sb->s_id, MAJOR(sb->s_dev), MINOR(sb->s_dev), &vaf);
+	printk("%c%cntfs3: %s: %pV\n", KERN_SOH_ASCII, level, sb->s_id, &vaf);
 
 	va_end(args);
 }
@@ -640,9 +638,6 @@ static void ntfs_put_super(struct super_block *sb)
 {
 	struct ntfs_sb_info *sbi = sb->s_fs_info;
 
-	ntfs_info(sb, "trying to unmount(r%c)...", sb_rdonly(sb) ? 'o' : 'w');
-	fs_common_stlog(sb, "ntfs3", "trying to unmount(r%c)...",
-			sb_rdonly(sb) ? 'o' : 'w');
 #ifdef CONFIG_PROC_FS
 	// Remove /proc/fs/ntfs3/..
 	if (sbi->procdir) {
@@ -656,9 +651,6 @@ static void ntfs_put_super(struct super_block *sb)
 	/* Mark rw ntfs as clear, if possible. */
 	ntfs_set_state(sbi, NTFS_DIRTY_CLEAR);
 	ntfs3_put_sbi(sbi);
-
-	ntfs_info(sb, "unmounted successfully!");
-	fs_common_stlog(sb, "ntfs3", "unmounted successfully!");
 }
 
 static int ntfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -1172,10 +1164,6 @@ static int ntfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	bool ro = sb_rdonly(sb);
 	struct NTFS_BOOT *boot2 = NULL;
 
-	ntfs_info(sb, "trying to mount(r%c)...", sb_rdonly(sb) ? 'o' : 'w');
-	fs_common_stlog(sb, "ntfs3", "trying to mount(r%c)...",
-			sb_rdonly(sb) ? 'o' : 'w');
-
 	ref.high = 0;
 
 	sbi->sb = sb;
@@ -1625,8 +1613,6 @@ load_root:
 	}
 #endif
 
-	ntfs_info(sb, "mounted successfully!");
-	fs_common_stlog(sb, "ntfs3", "mounted successfully!");
 	return 0;
 
 put_inode_out:
@@ -1635,8 +1621,6 @@ out:
 	ntfs3_put_sbi(sbi);
 	kfree(boot2);
 	ntfs3_put_sbi(sbi);
-	ntfs_info(sb, "failed to mount! (%d)", err);
-	fs_common_stlog(sb, "ntfs3", "failed to mount! (%d)", err);
 	return err;
 }
 

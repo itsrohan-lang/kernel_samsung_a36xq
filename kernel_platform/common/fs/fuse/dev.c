@@ -22,7 +22,6 @@
 #include <linux/swap.h>
 #include <linux/splice.h>
 #include <linux/sched.h>
-#include <linux/sched/mm.h>
 
 #include <trace/hooks/fuse.h>
 
@@ -116,7 +115,7 @@ static struct fuse_req *fuse_get_req(struct fuse_mount *fm, bool for_background)
 
 	if (fuse_block_alloc(fc, for_background)) {
 		err = -EINTR;
-		if (fuse_wait_event_killable_exclusive(fc->blocked_waitq,
+		if (wait_event_killable_exclusive(fc->blocked_waitq,
 				!fuse_block_alloc(fc, for_background)))
 			goto out;
 	}
@@ -336,6 +335,7 @@ void fuse_request_end(struct fuse_req *req)
 		/* Wake up waiter sleeping in request_wait_answer() */
 		wake_up(&req->waitq);
 		trace_android_vh_fuse_request_end(current);
+		trace_android_vh_fuse_request_end_ext(req, current);
 	}
 
 	if (test_bit(FR_ASYNC, &req->flags))
@@ -397,7 +397,7 @@ static void request_wait_answer(struct fuse_req *req)
 
 	if (!test_bit(FR_FORCE, &req->flags)) {
 		/* Only fatal signals may interrupt this */
-		err = fuse_wait_event_killable(req->waitq,
+		err = wait_event_killable(req->waitq,
 					test_bit(FR_FINISHED, &req->flags));
 		if (!err)
 			return;
@@ -418,7 +418,7 @@ static void request_wait_answer(struct fuse_req *req)
 	 * Either request is already in userspace, or it was forced.
 	 * Wait it out.
 	 */
-	fuse_wait_event(req->waitq, test_bit(FR_FINISHED, &req->flags));
+	wait_event(req->waitq, test_bit(FR_FINISHED, &req->flags));
 }
 
 static void __fuse_request_send(struct fuse_req *req)
@@ -432,6 +432,7 @@ static void __fuse_request_send(struct fuse_req *req)
 		req->out.h.error = -ENOTCONN;
 	} else {
 		req->in.h.unique = fuse_get_unique(fiq);
+		trace_android_vh_fuse_request_send_ext(req, &fiq->waitq);
 		/* acquire extra reference, since request is still needed
 		   after fuse_request_end() */
 		__fuse_get_request(req);
@@ -1246,9 +1247,6 @@ static ssize_t fuse_dev_do_read(struct fuse_dev *fud, struct file *file,
 			   fc->max_write))
 		return -EINVAL;
 
-	if (!(current->flags & PF_MEMALLOC_NOFS))
-		memalloc_nofs_save();
-
  restart:
 	for (;;) {
 		spin_lock(&fiq->lock);
@@ -1284,6 +1282,7 @@ static ssize_t fuse_dev_do_read(struct fuse_dev *fud, struct file *file,
 	}
 
 	req = list_entry(fiq->pending.next, struct fuse_req, list);
+	trace_android_vh_fuse_request_fetch(req, current);
 	clear_bit(FR_PENDING, &req->flags);
 	list_del_init(&req->list);
 	spin_unlock(&fiq->lock);
@@ -1948,9 +1947,14 @@ static ssize_t fuse_dev_do_write(struct fuse_dev *fud,
 	if (!err && req->in.h.opcode == FUSE_CANONICAL_PATH && !oh.error) {
 		char *path = (char *)req->args->out_args[0].value;
 
-		path[req->args->out_args[0].size - 1] = 0;
-		req->out.h.error =
-			kern_path(path, 0, req->args->canonical_path);
+		if (req->args->out_args[0].size == 0) {
+			req->out.h.error = -EBADMSG;
+		} else {
+			/* NUL-terminate inside the page; size<=PATH_MAX by construction */
+			path[min_t(unsigned int, req->args->out_args[0].size, PATH_MAX) - 1] = 0;
+			req->out.h.error =
+				kern_path(path, 0, req->args->canonical_path);
+		}
 	}
 
 	if (!err && (req->in.h.opcode == FUSE_LOOKUP ||
@@ -1960,8 +1964,19 @@ static ssize_t fuse_dev_do_write(struct fuse_dev *fud,
 				req->args->out_args[1].value;
 		struct fuse_entry_bpf *feb = container_of(febo, struct fuse_entry_bpf, out);
 
-		if (febo->backing_action == FUSE_ACTION_REPLACE)
-			feb->backing_file = fget(febo->backing_fd);
+		if (febo->backing_action == FUSE_ACTION_REPLACE) {
+			struct file *bf = fget(febo->backing_fd);
+
+			if (bf) {
+				if (bf->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC ||
+				    bf->f_inode->i_sb->s_stack_depth >=
+						FILESYSTEM_MAX_STACK_DEPTH) {
+					fput(bf);
+					bf = ERR_PTR(-ELOOP);
+				}
+			}
+			feb->backing_file = bf;
+		}
 		if (febo->bpf_action == FUSE_ACTION_REPLACE)
 			feb->bpf_file = fget(febo->bpf_fd);
 	}
@@ -2167,9 +2182,6 @@ void fuse_abort_conn(struct fuse_conn *fc)
 {
 	struct fuse_iqueue *fiq = &fc->iq;
 
-	ST_LOG("<%s> dev = %u:%u  fuse abort all requests",
-			__func__, MAJOR(fc->dev), MINOR(fc->dev));
-
 	spin_lock(&fc->lock);
 	if (fc->connected) {
 		struct fuse_dev *fud;
@@ -2235,7 +2247,7 @@ void fuse_wait_aborted(struct fuse_conn *fc)
 {
 	/* matches implicit memory barrier in fuse_drop_waiting() */
 	smp_mb();
-	fuse_wait_event(fc->blocked_waitq, atomic_read(&fc->num_waiting) == 0);
+	wait_event(fc->blocked_waitq, atomic_read(&fc->num_waiting) == 0);
 }
 
 int fuse_dev_release(struct inode *inode, struct file *file)

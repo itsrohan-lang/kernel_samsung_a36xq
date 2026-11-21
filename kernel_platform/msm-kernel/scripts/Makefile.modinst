@@ -26,9 +26,6 @@ quiet_cmd_symlink = SYMLINK $@
 
 $(MODLIB)/modules.order: modules.order FORCE
 	$(call cmd,install_modorder)
-	@cp $@ $@.tmp
-	@perl $(srctree)/scripts/sec_reorder.pl $@.tmp > $@
-	
 
 quiet_cmd_install_modorder = INSTALL $@
       cmd_install_modorder = sed 's:^\(.*\)\.o$$:kernel/\1.ko:' $< > $@

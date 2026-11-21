@@ -2,7 +2,6 @@
 /*
  * Qualcomm Technology Inc. ADSP Peripheral Image Loader for SDM845.
  * Copyright (c) 2018, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -733,7 +732,7 @@ static int adsp_probe(struct platform_device *pdev)
 		goto disable_pm;
 
 	ret = qcom_q6v5_init(&adsp->q6v5, pdev, rproc, desc->crash_reason_smem,
-			     0, 0, desc->load_state, qcom_adsp_pil_handover);
+			     desc->load_state, qcom_adsp_pil_handover);
 	if (ret)
 		goto disable_pm;
 

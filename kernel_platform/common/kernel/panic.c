@@ -61,7 +61,6 @@ bool crash_kexec_post_notifiers;
 int panic_on_warn __read_mostly;
 unsigned long panic_on_taint;
 bool panic_on_taint_nousertaint = false;
-bool stop_on_panic = false;
 static unsigned int warn_limit __read_mostly;
 
 int panic_timeout = CONFIG_PANIC_TIMEOUT;
@@ -397,11 +396,6 @@ void panic(const char *fmt, ...)
 	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 
 	panic_print_sys_info(true);
-
-	if (stop_on_panic) {
-		pr_emerg("stop_on_panic is called, freezing...\n");
-		while(1);
-	}
 
 	if (!panic_blink)
 		panic_blink = no_blink;
@@ -769,9 +763,15 @@ device_initcall(register_warn_debugfs);
  */
 __visible noinstr void __stack_chk_fail(void)
 {
+	unsigned long flags;
+
 	instrumentation_begin();
+	flags = user_access_save();
+
 	panic("stack-protector: Kernel stack is corrupted in: %pB",
 		__builtin_return_address(0));
+
+	user_access_restore(flags);
 	instrumentation_end();
 }
 EXPORT_SYMBOL(__stack_chk_fail);
@@ -783,7 +783,6 @@ core_param(panic_print, panic_print, ulong, 0644);
 core_param(pause_on_oops, pause_on_oops, int, 0644);
 core_param(panic_on_warn, panic_on_warn, int, 0644);
 core_param(crash_kexec_post_notifiers, crash_kexec_post_notifiers, bool, 0644);
-core_param(stop_on_panic, stop_on_panic, bool, 0644);
 
 static int __init oops_setup(char *s)
 {
@@ -821,10 +820,3 @@ static int __init panic_on_taint_setup(char *s)
 	return 0;
 }
 early_param("panic_on_taint", panic_on_taint_setup);
-
-static int __init stop_on_panic_setup(char *s)
-{
-	stop_on_panic = true;
-	return 0;
-}
-early_param("stop_on_panic", stop_on_panic_setup);

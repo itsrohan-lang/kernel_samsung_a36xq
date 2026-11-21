@@ -86,14 +86,6 @@ static inline unsigned long __reverse_ffs(unsigned long word)
 	return num;
 }
 
-static inline void update_max_undiscard_blks(struct f2fs_sb_info *sbi)
-{
-	struct discard_cmd_control *dcc = SM_I(sbi)->dcc_info;
-
-	if (dcc->undiscard_blks > sbi->sec_stat.max_undiscard_blks)
-		sbi->sec_stat.max_undiscard_blks = dcc->undiscard_blks;
-}
-
 /*
  * __find_rev_next(_zero)_bit is copied from lib/find_next_bit.c because
  * f2fs_set_bit makes MSB and LSB reversed in a byte.
@@ -384,7 +376,13 @@ out:
 	} else {
 		sbi->committed_atomic_block += fi->atomic_write_cnt;
 		set_inode_flag(inode, FI_ATOMIC_COMMITTED);
+
+		/*
+		 * inode may has no FI_ATOMIC_DIRTIED flag due to no write
+		 * before commit.
+		 */
 		if (is_inode_flag_set(inode, FI_ATOMIC_DIRTIED)) {
+			/* clear atomic dirty status and set vfs dirty status */
 			clear_inode_flag(inode, FI_ATOMIC_DIRTIED);
 			f2fs_mark_inode_dirty_sync(inode, true);
 		}
@@ -399,6 +397,7 @@ int f2fs_commit_atomic_write(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct f2fs_lock_context lc;
 	int err;
 
 	err = filemap_write_and_wait_range(inode->i_mapping, 0, LLONG_MAX);
@@ -406,13 +405,11 @@ int f2fs_commit_atomic_write(struct inode *inode)
 		return err;
 
 	f2fs_down_write(&fi->i_gc_rwsem[WRITE]);
-	f2fs_down_write(&F2FS_I(fi->cow_inode)->i_gc_rwsem[WRITE]);
-	f2fs_lock_op(sbi);
+	f2fs_lock_op(sbi, &lc);
 
 	err = __f2fs_commit_atomic_write(inode);
 
-	f2fs_unlock_op(sbi);
-	f2fs_up_write(&F2FS_I(fi->cow_inode)->i_gc_rwsem[WRITE]);
+	f2fs_unlock_op(sbi, &lc);
 	f2fs_up_write(&fi->i_gc_rwsem[WRITE]);
 
 	return err;
@@ -456,12 +453,13 @@ void f2fs_balance_fs(struct f2fs_sb_info *sbi, bool need)
 	} else {
 		struct f2fs_gc_control gc_control = {
 			.victim_segno = NULL_SEGNO,
-			.init_gc_type = BG_GC,
+			.init_gc_type = f2fs_sb_has_blkzoned(sbi) ?
+				FG_GC : BG_GC,
 			.no_bg_gc = true,
 			.should_migrate_blocks = false,
 			.err_gc_skipped = false,
 			.nr_free_secs = 1 };
-		f2fs_down_write(&sbi->gc_lock);
+		f2fs_down_write_trace(&sbi->gc_lock, &gc_control.lc);
 		stat_inc_gc_call_count(sbi, FOREGROUND);
 		f2fs_gc(sbi, &gc_control);
 	}
@@ -542,7 +540,6 @@ do_sync:
 	}
 	stat_inc_cp_call_count(sbi, BACKGROUND);
 	f2fs_sync_fs(sbi->sb, 1);
-	sbi->sec_stat.cp_cnt[STAT_CP_BG]++;
 }
 
 static int __submit_flush_wait(struct f2fs_sb_info *sbi,
@@ -991,7 +988,6 @@ static struct discard_cmd *__create_discard_cmd(struct f2fs_sb_info *sbi,
 	dc->bio_ref = 0;
 	atomic_inc(&dcc->discard_cmd_cnt);
 	dcc->undiscard_blks += len;
-	update_max_undiscard_blks(sbi);
 
 	return dc;
 }
@@ -1460,7 +1456,6 @@ static void __punch_discard_cmd(struct f2fs_sb_info *sbi,
 	if (blkaddr > di.lstart) {
 		dc->di.len = blkaddr - dc->di.lstart;
 		dcc->undiscard_blks += dc->di.len;
-		update_max_undiscard_blks(sbi);
 		__relocate_discard_cmd(dcc, dc);
 		modified = true;
 	}
@@ -1475,7 +1470,6 @@ static void __punch_discard_cmd(struct f2fs_sb_info *sbi,
 			dc->di.len--;
 			dc->di.start++;
 			dcc->undiscard_blks += dc->di.len;
-			update_max_undiscard_blks(sbi);
 			__relocate_discard_cmd(dcc, dc);
 		}
 	}
@@ -1534,7 +1528,6 @@ static void __update_discard_tree_range(struct f2fs_sb_info *sbi,
 							max_discard_blocks)) {
 			prev_dc->di.len += di.len;
 			dcc->undiscard_blks += di.len;
-			update_max_undiscard_blks(sbi);
 			__relocate_discard_cmd(dcc, prev_dc);
 			di = prev_dc->di;
 			tdc = prev_dc;
@@ -1549,7 +1542,6 @@ static void __update_discard_tree_range(struct f2fs_sb_info *sbi,
 			next_dc->di.len += di.len;
 			next_dc->di.start = di.start;
 			dcc->undiscard_blks += di.len;
-			update_max_undiscard_blks(sbi);
 			__relocate_discard_cmd(dcc, next_dc);
 			if (tdc)
 				__remove_discard_cmd(sbi, tdc);
@@ -1602,21 +1594,6 @@ static void __queue_discard_cmd(struct f2fs_sb_info *sbi,
 	mutex_unlock(&SM_I(sbi)->dcc_info->cmd_lock);
 }
 
-static bool __should_flush_discard(struct f2fs_sb_info *sbi)
-{
-	struct discard_cmd_control *dcc = SM_I(sbi)->dcc_info;
-
-	/* undisacrd_blks : number of 4KB blocks */
-	if (dcc->undiscard_blks > dcc->undiscard_thresh_blks)
-		return true;
-
-	if (atomic_read(&dcc->discard_cmd_cnt) >
-			dcc->discard_cmd_slab_thresh_cnt)
-		return true;
-
-	return false;
-}
-
 static void __issue_discard_cmd_orderly(struct f2fs_sb_info *sbi,
 		struct discard_policy *dpolicy, int *issued)
 {
@@ -1642,8 +1619,10 @@ static void __issue_discard_cmd_orderly(struct f2fs_sb_info *sbi,
 		if (dc->state != D_PREP)
 			goto next;
 
-		if (dpolicy->io_aware && !is_idle(sbi, DISCARD_TIME) &&
-					!__should_flush_discard(sbi)) {
+		if (*issued > 0 && unlikely(freezing(current)))
+			break;
+
+		if (dpolicy->io_aware && !is_idle(sbi, DISCARD_TIME)) {
 			io_interrupted = true;
 			break;
 		}
@@ -1682,6 +1661,7 @@ static int __issue_discard_cmd(struct f2fs_sb_info *sbi,
 	struct blk_plug plug;
 	int i, issued;
 	bool io_interrupted = false;
+	bool suspended = false;
 
 	if (dpolicy->timeout)
 		f2fs_update_time(sbi, UMOUNT_DISCARD_TIMEOUT);
@@ -1712,13 +1692,17 @@ retry:
 		list_for_each_entry_safe(dc, tmp, pend_list, list) {
 			f2fs_bug_on(sbi, dc->state != D_PREP);
 
+			if (issued > 0 && unlikely(freezing(current))) {
+				suspended = true;
+				break;
+			}
+
 			if (dpolicy->timeout &&
 				f2fs_time_over(sbi, UMOUNT_DISCARD_TIMEOUT))
 				break;
 
 			if (dpolicy->io_aware && i < dpolicy->io_aware_gran &&
-					!is_idle(sbi, DISCARD_TIME) &&
-					!__should_flush_discard(sbi)) {
+						!is_idle(sbi, DISCARD_TIME)) {
 				io_interrupted = true;
 				break;
 			}
@@ -1732,7 +1716,8 @@ retry:
 next:
 		mutex_unlock(&dcc->cmd_lock);
 
-		if (issued >= dpolicy->max_requests || io_interrupted)
+		if (issued >= dpolicy->max_requests || io_interrupted ||
+					suspended)
 			break;
 	}
 
@@ -1952,7 +1937,7 @@ static int issue_discard_thread(void *data)
 
 	do {
 		wait_event_freezable_timeout(*q,
-				kthread_should_stop() || !wait_ms || dcc->discard_wake,
+				kthread_should_stop() || dcc->discard_wake,
 				msecs_to_jiffies(wait_ms));
 
 		if (sbi->gc_mode == GC_URGENT_HIGH ||
@@ -1986,8 +1971,6 @@ static int issue_discard_thread(void *data)
 		if (issued > 0) {
 			__wait_all_discard_cmd(sbi, &dpolicy);
 			wait_ms = dpolicy.min_interval;
-			if (dpolicy.io_aware && is_idle(sbi, DISCARD_TIME))
-				wait_ms = 0;
 		} else if (issued == -1) {
 			wait_ms = f2fs_time_to_wait(sbi, DISCARD_TIME);
 			if (!wait_ms)
@@ -2345,7 +2328,7 @@ static int create_discard_cmd_control(struct f2fs_sb_info *sbi)
 	if (!dcc)
 		return -ENOMEM;
 
-	dcc->discard_io_aware_gran = MAX_PLIST_NUM - 1;
+	dcc->discard_io_aware_gran = MAX_PLIST_NUM;
 	dcc->discard_granularity = DEFAULT_DISCARD_GRANULARITY;
 	dcc->max_ordered_discard = DEFAULT_MAX_ORDERED_DISCARD_GRANULARITY;
 	dcc->discard_io_aware = DPOLICY_IO_AWARE_ENABLE;
@@ -2374,10 +2357,6 @@ static int create_discard_cmd_control(struct f2fs_sb_info *sbi)
 	dcc->next_pos = 0;
 	dcc->root = RB_ROOT_CACHED;
 	dcc->rbtree_check = false;
-
-	dcc->discard_cmd_slab_thresh_cnt =
-		(DEF_DISCARD_SLAB_THRESHOLD << 20) / sizeof(struct discard_cmd);
-	dcc->undiscard_thresh_blks = DEF_UNDISCARD_THRESHOLD << 8;
 
 	init_waitqueue_head(&dcc->discard_wait_queue);
 	SM_I(sbi)->dcc_info = dcc;
@@ -2413,12 +2392,6 @@ static void destroy_discard_cmd_control(struct f2fs_sb_info *sbi)
 static bool __mark_sit_entry_dirty(struct f2fs_sb_info *sbi, unsigned int segno)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
-
-	if (segno >= MAIN_SEGS(sbi)) {
-		f2fs_err_ratelimited(sbi, "[DDP] %s segno: %u >= MAIN_SEGS: %u\n",
-			__func__, segno, (unsigned int)MAIN_SEGS(sbi));
-		f2fs_bug_on(sbi, 1);
-	}
 
 	if (!__test_and_set_bit(segno, sit_i->dirty_sentries_bitmap)) {
 		sit_i->dirty_sentries++;
@@ -2783,14 +2756,11 @@ static int get_new_segment(struct f2fs_sb_info *sbi,
 			unsigned int *newseg, bool new_sec, bool pinning)
 {
 	struct free_segmap_info *free_i = FREE_I(sbi);
-	unsigned int segno, secno, zoneno, total_secs;
+	unsigned int segno, secno, zoneno;
 	unsigned int total_zones = MAIN_SECS(sbi) / sbi->secs_per_zone;
 	unsigned int hint = GET_SEC_FROM_SEG(sbi, *newseg);
 	unsigned int old_zoneno = GET_ZONE_FROM_SEG(sbi, *newseg);
 	bool init = true;
-	bool retry = false;
-	bool sec_alloc_pin = pinning && sbi->pin_guaranteed_blkaddr;
-	bool need_bug_on = false;
 	int i;
 	int ret = 0;
 
@@ -2799,24 +2769,6 @@ static int get_new_segment(struct f2fs_sb_info *sbi,
 	if (time_to_inject(sbi, FAULT_NO_SEGMENT)) {
 		ret = -ENOSPC;
 		goto out_unlock;
-	}
-
-	if (sec_alloc_pin) {
-		if (sbi->pin_reserved_sec != NULL_SECNO) {
-			secno = sbi->pin_reserved_sec;
-			sbi->pin_reserved_sec = NULL_SECNO;
-			if (!test_bit(secno, free_i->free_secmap)) {
-				segno = GET_SEG_FROM_SEC(sbi, secno);
-				goto got_it;
-			}
-		}
-
-		total_secs = GET_SECNO(sbi, sbi->pin_guaranteed_blkaddr);
-		total_zones = total_secs / sbi->secs_per_zone;
-		if (hint >= total_secs)
-			hint = 0;
-	} else {
-		total_secs = MAIN_SECS(sbi);
 	}
 
 	if (!new_sec && ((*newseg + 1) % SEGS_PER_SEC(sbi))) {
@@ -2842,7 +2794,7 @@ static int get_new_segment(struct f2fs_sb_info *sbi,
 #endif
 
 find_other_zone:
-	secno = find_next_zero_bit(free_i->free_secmap, total_secs, hint);
+	secno = find_next_zero_bit(free_i->free_secmap, MAIN_SECS(sbi), hint);
 
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (secno >= MAIN_SECS(sbi) && f2fs_sb_has_blkzoned(sbi)) {
@@ -2855,52 +2807,23 @@ find_other_zone:
 								MAIN_SECS(sbi));
 		if (secno >= MAIN_SECS(sbi)) {
 			ret = -ENOSPC;
-			need_bug_on = true;
+			f2fs_bug_on(sbi, 1);
 			goto out_unlock;
 		}
 	}
 #endif
 
-	if (secno >= total_secs) {
+	if (secno >= MAIN_SECS(sbi)) {
 		secno = find_first_zero_bit(free_i->free_secmap,
-							total_secs);
-		if (unlikely(secno >= total_secs)) {
-			if (sec_alloc_pin) {
-				static bool sec_ddp_log_nofree;
-
-				total_secs = MAIN_SECS(sbi);
-				total_zones = MAIN_SECS(sbi) / sbi->secs_per_zone;
-				secno = find_first_zero_bit(free_i->free_secmap,
-							total_secs);
-				if (!sec_ddp_log_nofree) {
-					ST_LOG("[DDP] no free space in the non-shrinkable area, secno: %u",
-							secno);
-					sec_ddp_log_nofree = true;
-				}
-				if (unlikely(secno >= MAIN_SECS(sbi))) {
-					ret = -ENOSPC;
-					need_bug_on = true;
-					goto out_unlock;
-				}
-			} else {
-				ret = -ENOSPC;
-				need_bug_on = true;
-				goto out_unlock;
-			}
+							MAIN_SECS(sbi));
+		if (secno >= MAIN_SECS(sbi)) {
+			ret = -ENOSPC;
+			f2fs_bug_on(sbi, !pinning);
+			goto out_unlock;
 		}
 	}
 	segno = GET_SEG_FROM_SEC(sbi, secno);
 	zoneno = GET_ZONE_FROM_SEC(sbi, secno);
-
-	if (!sec_alloc_pin && secno == sbi->pin_reserved_sec) {
-		f2fs_bug_on_endio(sbi, retry);
-		if (secno + 1 >= total_secs)
-			hint = 0;
-		else
-			hint = secno + 1;
-		retry = true;
-		goto find_other_zone;
-	}
 
 	/* give up on finding another zone */
 	if (!init)
@@ -2924,11 +2847,7 @@ find_other_zone:
 	}
 got_it:
 	/* set it as dirty segment in free segmap */
-	if (unlikely(test_bit(segno, free_i->free_segmap))) {
-		ret = -ENOSPC;
-		need_bug_on = true;
-		goto out_unlock;
-	}
+	f2fs_bug_on(sbi, test_bit(segno, free_i->free_segmap));
 
 	/* no free section in conventional zone */
 	if (new_sec && pinning &&
@@ -2941,10 +2860,8 @@ got_it:
 out_unlock:
 	spin_unlock(&free_i->segmap_lock);
 
-	if (ret == -ENOSPC)
+	if (ret == -ENOSPC && !pinning)
 		f2fs_stop_checkpoint(sbi, false, STOP_CP_REASON_NO_SEGMENT);
-
-	f2fs_bug_on(sbi, need_bug_on);
 	return ret;
 }
 
@@ -2982,10 +2899,6 @@ static unsigned int __get_next_segno(struct f2fs_sb_info *sbi, int type)
 	unsigned short seg_type = curseg->seg_type;
 
 	sanity_check_seg_type(sbi, seg_type);
-
-	if (type == CURSEG_COLD_DATA_PINNED && sbi->pin_guaranteed_blkaddr)
-		return 0;
-
 	if (__is_large_section(sbi)) {
 		if (f2fs_need_rand_seg(sbi)) {
 			unsigned int hint = GET_SEC_FROM_SEG(sbi, curseg->segno);
@@ -3014,10 +2927,17 @@ static unsigned int __get_next_segno(struct f2fs_sb_info *sbi, int type)
 		return SIT_I(sbi)->last_victim[ALLOC_NEXT];
 
 	/* find segments from 0 to reuse freed segments */
-	if (F2FS_OPTION(sbi).alloc_mode == ALLOC_MODE_REUSE)
+	if (f2fs_get_alloc_mode(sbi) == ALLOC_MODE_REUSE)
 		return 0;
 
 	return curseg->segno;
+}
+
+static void reset_curseg_fields(struct curseg_info *curseg)
+{
+	curseg->inited = false;
+	curseg->segno = NULL_SEGNO;
+	curseg->next_segno = 0;
 }
 
 /*
@@ -3038,7 +2958,7 @@ static int new_curseg(struct f2fs_sb_info *sbi, int type, bool new_sec)
 	ret = get_new_segment(sbi, &segno, new_sec, pinning);
 	if (ret) {
 		if (ret == -ENOSPC)
-			curseg->segno = NULL_SEGNO;
+			reset_curseg_fields(curseg);
 		return ret;
 	}
 
@@ -3110,7 +3030,6 @@ static int change_curseg(struct f2fs_sb_info *sbi, int type)
 		memset(curseg->sum_blk, 0, SUM_ENTRY_SIZE);
 		return PTR_ERR(sum_page);
 	}
-
 	sum_node = (struct f2fs_summary_block *)page_address(sum_page);
 	memcpy(curseg->sum_blk, sum_node, SUM_ENTRY_SIZE);
 	f2fs_put_page(sum_page, 1);
@@ -3140,7 +3059,6 @@ static int get_atssr_segment(struct f2fs_sb_info *sbi, int type,
 		ret = new_curseg(sbi, type, true);
 	}
 	stat_inc_seg_type(sbi, curseg);
-	sbi->sec_stat.alloc_seg_type[curseg->alloc_type]++;
 	return ret;
 }
 
@@ -3339,7 +3257,7 @@ int f2fs_allocate_segment_for_resize(struct f2fs_sb_info *sbi, int type,
 		ret = new_curseg(sbi, type, true);
 
 	stat_inc_seg_type(sbi, curseg);
-	sbi->sec_stat.alloc_seg_type[curseg->alloc_type]++;
+
 	locate_dirty_segment(sbi, segno);
 unlock:
 	up_write(&SIT_I(sbi)->sentry_lock);
@@ -3364,16 +3282,10 @@ static int __allocate_new_segment(struct f2fs_sb_info *sbi, int type,
 		goto allocate;
 
 	if (!force && curseg->inited &&
-		!curseg->next_blkoff &&
-		!get_valid_blocks(sbi, curseg->segno, new_sec) &&
-		!get_ckpt_valid_blocks(sbi, curseg->segno, new_sec)) {
-		if (type == CURSEG_COLD_DATA_PINNED && sbi->pin_guaranteed_blkaddr) {
-			if (curseg->segno >= GET_SEGNO(sbi, sbi->pin_guaranteed_blkaddr))
-				goto allocate;
-			sbi->pin_reserved_sec = NULL_SECNO;
-		}
+	    !curseg->next_blkoff &&
+	    !get_valid_blocks(sbi, curseg->segno, new_sec) &&
+	    !get_ckpt_valid_blocks(sbi, curseg->segno, new_sec))
 		return 0;
-	}
 
 allocate:
 	old_segno = curseg->segno;
@@ -3381,7 +3293,6 @@ allocate:
 	if (err)
 		return err;
 	stat_inc_seg_type(sbi, curseg);
-	sbi->sec_stat.alloc_seg_type[curseg->alloc_type]++;
 	locate_dirty_segment(sbi, old_segno);
 	return 0;
 }
@@ -3401,19 +3312,20 @@ int f2fs_allocate_new_section(struct f2fs_sb_info *sbi, int type, bool force)
 
 int f2fs_allocate_pinning_section(struct f2fs_sb_info *sbi)
 {
+	struct f2fs_lock_context lc;
 	int err;
 	bool gc_required = true;
 
 retry:
-	f2fs_lock_op(sbi);
+	f2fs_lock_op(sbi, &lc);
 	err = f2fs_allocate_new_section(sbi, CURSEG_COLD_DATA_PINNED, false);
-	f2fs_unlock_op(sbi);
+	f2fs_unlock_op(sbi, &lc);
 
 	if (f2fs_sb_has_blkzoned(sbi) && err == -EAGAIN && gc_required) {
-		f2fs_down_write(&sbi->gc_lock);
+		f2fs_down_write_trace(&sbi->gc_lock, &lc);
 		err = f2fs_gc_range(sbi, 0, GET_SEGNO(sbi, FDEV(0).end_blk),
 				true, ZONED_PIN_SEC_REQUIRED_COUNT);
-		f2fs_up_write(&sbi->gc_lock);
+		f2fs_up_write_trace(&sbi->gc_lock, &lc);
 
 		gc_required = false;
 		if (!err)
@@ -3533,6 +3445,7 @@ int f2fs_trim_fs(struct f2fs_sb_info *sbi, struct fstrim_range *range)
 	block_t start_block, end_block;
 	struct cp_control cpc;
 	struct discard_policy dpolicy;
+	struct f2fs_lock_context lc;
 	unsigned long long trimmed = 0;
 	int err = 0;
 	bool need_align = f2fs_lfs_mode(sbi) && __is_large_section(sbi);
@@ -3565,10 +3478,10 @@ int f2fs_trim_fs(struct f2fs_sb_info *sbi, struct fstrim_range *range)
 	if (sbi->discard_blks == 0)
 		goto out;
 
-	f2fs_down_write(&sbi->gc_lock);
+	f2fs_down_write_trace(&sbi->gc_lock, &lc);
 	stat_inc_cp_call_count(sbi, TOTAL_CALL);
 	err = f2fs_write_checkpoint(sbi, &cpc);
-	f2fs_up_write(&sbi->gc_lock);
+	f2fs_up_write_trace(&sbi->gc_lock, &lc);
 	if (err)
 		goto out;
 
@@ -3818,13 +3731,6 @@ static void f2fs_randomize_chunk(struct f2fs_sb_info *sbi,
 		get_random_u32_inclusive(1, sbi->max_fragment_hole);
 }
 
-static void reset_curseg_fields(struct curseg_info *curseg)
-{
-	curseg->inited = false;
-	curseg->segno = NULL_SEGNO;
-	curseg->next_segno = 0;
-}
-
 int f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 		block_t old_blkaddr, block_t *new_blkaddr,
 		struct f2fs_summary *sum, int type,
@@ -3871,7 +3777,6 @@ int f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	if (curseg->next_blkoff >= f2fs_usable_blks_in_seg(sbi, curseg->segno))
 		segment_full = true;
 	stat_inc_block_count(sbi, curseg);
-	sbi->sec_stat.alloc_blk_count[curseg->alloc_type]++;
 
 	if (from_gc) {
 		old_mtime = get_segment_mtime(sbi, old_blkaddr);
@@ -3909,9 +3814,7 @@ int f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 				ret = new_curseg(sbi, type, false);
 			else
 				ret = change_curseg(sbi, type);
-
 			stat_inc_seg_type(sbi, curseg);
-			sbi->sec_stat.alloc_seg_type[curseg->alloc_type]++;
 		}
 
 		if (ret)
@@ -4058,8 +3961,6 @@ void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct folio *folio,
 		.in_list = 0,
 	};
 
-	f2fs_cond_set_fua(&fio);
-
 	if (unlikely(folio->index >= MAIN_BLKADDR(sbi)))
 		fio.op_flags &= ~REQ_META;
 
@@ -4126,7 +4027,6 @@ int f2fs_inplace_write_data(struct f2fs_io_info *fio)
 		f2fs_truncate_meta_inode_pages(sbi, fio->new_blkaddr, 1);
 
 	stat_inc_inplace_blocks(fio->sbi);
-	atomic64_inc(&(sbi->sec_stat.inplace_count));
 
 	if (fio->bio && !IS_F2FS_IPU_NOCACHE(sbi))
 		err = f2fs_merge_page_bio(fio);
@@ -4729,18 +4629,16 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	struct list_head *head = &SM_I(sbi)->sit_entry_set;
 	bool to_journal = !is_sbi_flag_set(sbi, SBI_IS_RESIZEFS);
 	struct seg_entry *se;
-	unsigned int main_segs;
 
 	down_write(&sit_i->sentry_lock);
 
-	if (!sit_i->dirty_sentries && to_journal)
+	if (!sit_i->dirty_sentries)
 		goto out;
 
 	/*
 	 * add and account sit entries of dirty bitmap in sit entry
 	 * set temporarily
 	 */
-	main_segs = (unsigned int)MAIN_SEGS(sbi);
 	add_sits_in_set(sbi);
 
 	/*
@@ -4764,13 +4662,6 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 		unsigned int end = min(start_segno + SIT_ENTRY_PER_BLOCK,
 						(unsigned long)MAIN_SEGS(sbi));
 		unsigned int segno = start_segno;
-		int err = 0;
-
-		if (main_segs != (unsigned int)MAIN_SEGS(sbi)) {
-			f2fs_err_ratelimited(sbi, "[DDP] main_segs: %u != MAIN_SEGS: %u\n",
-					main_segs, (unsigned int)MAIN_SEGS(sbi));
-			f2fs_bug_on(sbi, 1);
-		}
 
 		if (to_journal &&
 			!__has_cursum_space(journal, ses->entry_cnt, SIT_JOURNAL))
@@ -4804,25 +4695,20 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 				offset = f2fs_lookup_journal_in_cursum(journal,
 							SIT_JOURNAL, segno, 1);
 				f2fs_bug_on(sbi, offset < 0);
-				if (segno >= MAIN_SEGS(sbi)) {
-					f2fs_err_ratelimited(sbi, "[DDP] segno: %u >= MAIN_SEGS: %u\n",
-							segno, (unsigned int)MAIN_SEGS(sbi));
-					f2fs_bug_on(sbi, 1);
-				}
 				segno_in_journal(journal, offset) =
 							cpu_to_le32(segno);
 				seg_info_to_raw_sit(se,
 					&sit_in_journal(journal, offset));
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 					&sit_in_journal(journal, offset));
 			} else {
 				sit_offset = SIT_ENTRY_OFFSET(sit_i, segno);
 				seg_info_to_raw_sit(se,
 						&raw_sit->entries[sit_offset]);
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 						&raw_sit->entries[sit_offset]);
 			}
-			f2fs_bug_on(sbi, err);
+
 			__clear_bit(segno, bitmap);
 			sit_i->dirty_sentries--;
 			ses->entry_cnt--;
@@ -5054,11 +4940,8 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 			f2fs_put_page(page, 1);
 
 			err = check_block_count(sbi, start, &sit);
-			if (err) {
-				print_block_data(sbi, current_sit_addr(sbi, start),
-						 page_address(page), 0,  F2FS_BLKSIZE);
+			if (err)
 				return err;
-			}
 			seg_info_from_raw_sit(se, &sit);
 
 			if (se->type >= NR_PERSISTENT_LOG) {
@@ -5113,11 +4996,8 @@ init_discard_map_done:
 		sit_valid_blocks[SE_PAGETYPE(se)] -= old_valid_blocks;
 
 		err = check_block_count(sbi, start, &sit);
-		if (err) {
-			print_block_data(sbi, 0, (void *)&sit, 0,
-					 sizeof(struct f2fs_sit_entry));
+		if (err)
 			break;
-		}
 		seg_info_from_raw_sit(se, &sit);
 
 		if (se->type >= NR_PERSISTENT_LOG) {

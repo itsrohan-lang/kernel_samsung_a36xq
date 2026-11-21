@@ -186,24 +186,6 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 	return IRQ_HANDLED;
 }
 
-static int pm8941_pwrkey_status(void *_data)
-{
-	struct pm8941_pwrkey *pwrkey = _data;
-	unsigned int sts;
-	int err;
-
-	err = regmap_read(pwrkey->regmap, pwrkey->baseaddr + PON_RT_STS, &sts);
-	if (err) {
-		dev_err(pwrkey->dev, "%s regmap_read error(%d)\n", __func__, err);
-		return err;
-	}
-
-	sts &= pwrkey->data->status_bit;
-	dev_dbg(pwrkey->dev, "%s code : %d, sts : %d\n", __func__, pwrkey->code, sts);
-
-	return sts;
-}
-
 static int pm8941_pwrkey_sw_debounce_init(struct pm8941_pwrkey *pwrkey)
 {
 	unsigned int val, addr, mask;
@@ -286,10 +268,6 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
 
 	pwrkey->dev = &pdev->dev;
 	pwrkey->data = of_device_get_match_data(&pdev->dev);
-	if (!pwrkey->data) {
-		dev_err(&pdev->dev, "match data not found\n");
-		return -ENODEV;
-	}
 
 	parent = pdev->dev.parent;
 	regmap_node = pdev->dev.of_node;
@@ -426,9 +404,6 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, pwrkey);
 	device_init_wakeup(&pdev->dev, 1);
-
-	if (pm8941_pwrkey_status(pwrkey) > 0)
-		pm8941_pwrkey_irq(pwrkey->irq, pwrkey);
 
 	return 0;
 }

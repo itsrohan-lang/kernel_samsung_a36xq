@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2012, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _LINUX_CORESIGHT_H
@@ -167,7 +166,6 @@ struct coresight_desc {
 
 /**
  * struct coresight_connection - representation of a single connection
- * @source_name: source component's name.
  * @src_port:	a connection's output port number.
  * @dest_port:	destination's input port number @src_port is connected to.
  * @dest_fwnode: destination component's fwnode handle.
@@ -196,7 +194,6 @@ struct coresight_desc {
  *                                   +-----------------------------+
  */
 struct coresight_connection {
-	const char *source_name;
 	int src_port;
 	int dest_port;
 	struct fwnode_handle *dest_fwnode;
@@ -588,6 +585,10 @@ extern int coresight_enable(struct coresight_device *csdev);
 extern void coresight_disable(struct coresight_device *csdev);
 extern int coresight_timeout(struct csdev_access *csa, u32 offset,
 			     int position, int value);
+typedef void (*coresight_timeout_cb_t) (struct csdev_access *, u32, int, int);
+extern int coresight_timeout_action(struct csdev_access *csa, u32 offset,
+					int position, int value,
+					coresight_timeout_cb_t cb);
 
 extern int coresight_claim_device(struct coresight_device *csdev);
 extern int coresight_claim_device_unlocked(struct coresight_device *csdev);

@@ -40,9 +40,6 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 #include <asm/kfence.h>
-#ifdef CONFIG_RKP
-#include <linux/rkp.h>
-#endif
 
 #define NO_BLOCK_MAPPINGS	BIT(0)
 #define NO_CONT_MAPPINGS	BIT(1)
@@ -291,13 +288,7 @@ static void alloc_init_cont_pmd(pud_t *pudp, unsigned long addr,
 		if (flags & NO_EXEC_MAPPINGS)
 			pudval |= PUD_TABLE_PXN;
 		BUG_ON(!pgtable_alloc);
-#ifdef CONFIG_RKP
-		pmd_phys = rkp_ro_alloc_phys(PMD_SHIFT);
-		if (!pmd_phys)
-			pmd_phys = pgtable_alloc(PMD_SHIFT);
-#else
 		pmd_phys = pgtable_alloc(PMD_SHIFT);
-#endif
 		__pud_populate(pudp, pmd_phys, pudval);
 		pud = READ_ONCE(*pudp);
 	}
@@ -678,33 +669,6 @@ static pgprot_t kernel_exec_prot(void)
 	return rodata_enabled ? PAGE_KERNEL_ROX : PAGE_KERNEL_EXEC;
 }
 
-#ifdef CONFIG_RKP
-static void __init map_kernel_text_segment(pgd_t *pgdp, void *va_start, void *va_end,
-				      pgprot_t prot, struct vm_struct *vma,
-				      int flags, unsigned long vm_flags)
-{
-	phys_addr_t pa_start = __pa_symbol(va_start);
-	unsigned long size = va_end - va_start;
-
-	WARN_ON(!PAGE_ALIGNED(pa_start));
-	WARN_ON(!PAGE_ALIGNED(size));
-
-	__create_pgd_mapping(pgdp, pa_start, (unsigned long)va_start, size, prot,
-			     rkp_ro_alloc_phys, flags);
-
-	if (!(vm_flags & VM_NO_GUARD))
-		size += PAGE_SIZE;
-
-	vma->addr	= (void *)((unsigned long)va_start & PMD_MASK);
-	vma->phys_addr	= (phys_addr_t)((unsigned long)pa_start & PMD_MASK);
-	vma->size	= size + (unsigned long)va_start - (unsigned long)vma->addr;
-	vma->flags	= VM_MAP | vm_flags;
-	vma->caller	= __builtin_return_address(0);
-
-	vm_area_add_early(vma);
-}
-#endif
-
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 static int __init map_entry_trampoline(void)
 {
@@ -779,13 +743,8 @@ static void __init map_kernel(pgd_t *pgdp)
 	 * Only rodata will be remapped with different permissions later on,
 	 * all other segments are allowed to use contiguous mappings.
 	 */
-#ifdef CONFIG_RKP
-	map_kernel_text_segment(pgdp, _stext, _etext, text_prot, &vmlinux_text, 0,
-			   VM_NO_GUARD);
-#else
 	map_kernel_segment(pgdp, _stext, _etext, text_prot, &vmlinux_text, 0,
 			   VM_NO_GUARD);
-#endif
 	map_kernel_segment(pgdp, __start_rodata, __inittext_begin, PAGE_KERNEL,
 			   &vmlinux_rodata, NO_CONT_MAPPINGS, VM_NO_GUARD);
 	map_kernel_segment(pgdp, __inittext_begin, __inittext_end, text_prot,
@@ -835,9 +794,6 @@ void __init paging_init(void)
 
 	idmap_t0sz = 63UL - __fls(__pa_symbol(_end) | GENMASK(VA_BITS_MIN - 1, 0));
 
-#ifdef CONFIG_RKP
-	rkp_robuffer_init();
-#endif
 	map_kernel(pgdp);
 	map_mem(pgdp);
 
@@ -1194,8 +1150,11 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 		struct vmem_altmap *altmap)
 {
 	WARN_ON((start < VMEMMAP_START) || (end > VMEMMAP_END));
+	/* [start, end] should be within one section */
+	WARN_ON_ONCE(end - start > PAGES_PER_SECTION * sizeof(struct page));
 
-	if (!IS_ENABLED(CONFIG_ARM64_4K_PAGES))
+	if (!IS_ENABLED(CONFIG_ARM64_4K_PAGES) ||
+	    (end - start < PAGES_PER_SECTION * sizeof(struct page)))
 		return vmemmap_populate_basepages(start, end, node, altmap);
 	else
 		return vmemmap_populate_hugepages(start, end, node, altmap);
@@ -1294,7 +1253,8 @@ int pud_free_pmd_page(pud_t *pudp, unsigned long addr)
 	next = addr;
 	end = addr + PUD_SIZE;
 	do {
-		pmd_free_pte_page(pmdp, next);
+		if (pmd_present(pmdp_get(pmdp)))
+			pmd_free_pte_page(pmdp, next);
 	} while (pmdp++, next += PMD_SIZE, next != end);
 
 	pud_clear(pudp);
@@ -1369,7 +1329,8 @@ int arch_add_memory(int nid, u64 start, u64 size,
 		__remove_pgd_mapping(swapper_pg_dir,
 				     __phys_to_virt(start), size);
 	else {
-		max_pfn = PFN_UP(start + size);
+		/* Address of hotplugged memory can be smaller */
+		max_pfn = max(max_pfn, PFN_UP(start + size));
 		max_low_pfn = max_pfn;
 	}
 

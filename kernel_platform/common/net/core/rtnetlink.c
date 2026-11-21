@@ -63,9 +63,6 @@
 #define RTNL_MAX_TYPE		50
 #define RTNL_SLAVE_MAX_TYPE	44
 
-#define CONFIG_DEBUG_RTNL_LATENCY
-#define RTNL_LATENCY_TIME_MS 500
-
 struct rtnl_link {
 	rtnl_doit_func		doit;
 	rtnl_dumpit_func	dumpit;
@@ -76,53 +73,15 @@ struct rtnl_link {
 
 static DEFINE_MUTEX(rtnl_mutex);
 
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-static unsigned long time_latency;
-static char owner_comm[TASK_COMM_LEN];
-#endif
-
 void rtnl_lock(void)
 {
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	unsigned long local_time_latency = jiffies;
-
 	mutex_lock(&rtnl_mutex);
-
-	if (time_after(jiffies, local_time_latency + RTNL_LATENCY_TIME_MS * HZ / 1000)) {
-		pr_err("rtnl_lock: %s: %s took over %lu msec to grab local rtnl_lock!\n",
-			__func__, current->comm, (jiffies - local_time_latency) * 1000 / HZ);
-		dump_stack();
-	}
-
-	memcpy(owner_comm, current->comm, TASK_COMM_LEN);
-	time_latency = jiffies;
-#else
-	mutex_lock(&rtnl_mutex);
-#endif
 }
 EXPORT_SYMBOL(rtnl_lock);
 
 int rtnl_lock_killable(void)
 {
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	unsigned long local_time_latency = jiffies;
-	int ret = mutex_lock_killable(&rtnl_mutex);
-
-	if (time_after(jiffies, local_time_latency + RTNL_LATENCY_TIME_MS * HZ / 1000)) {
-		pr_err("rtnl_lock: %s: %s took over %lu msec to grab local rtnl_lock_killable! ret=%d\n",
-			__func__, current->comm, (jiffies - local_time_latency) * 1000 / HZ, ret);
-		dump_stack();
-	}
-
-	if (!ret) {
-		memcpy(owner_comm, current->comm, TASK_COMM_LEN);
-		time_latency = jiffies;
-	}
-
-	return ret;
-#else
 	return mutex_lock_killable(&rtnl_mutex);
-#endif
 }
 EXPORT_SYMBOL(rtnl_lock_killable);
 
@@ -175,15 +134,6 @@ void __rtnl_unlock(void)
 	 */
 	WARN_ON(!list_empty(&net_todo_list));
 
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	if (time_after(jiffies, time_latency + RTNL_LATENCY_TIME_MS * HZ / 1000)) {
-		pr_err("rtnl_lock: %s: %s(%s) took over %lu msec to unlock\n", __func__,
-			owner_comm, current->comm, (jiffies - time_latency) * 1000 / HZ);
-		dump_stack();
-	}
-	time_latency = jiffies;
-#endif
-
 	mutex_unlock(&rtnl_mutex);
 
 	while (head) {
@@ -204,21 +154,7 @@ EXPORT_SYMBOL(rtnl_unlock);
 
 int rtnl_trylock(void)
 {
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	int ret;
-
-	ret = mutex_trylock(&rtnl_mutex);
-
-	if (ret) {
-		/* succeed to grab lock */
-		memcpy(owner_comm, current->comm, TASK_COMM_LEN);
-		time_latency = jiffies;
-	}
-
-	return ret;
-#else
 	return mutex_trylock(&rtnl_mutex);
-#endif
 }
 EXPORT_SYMBOL(rtnl_trylock);
 
@@ -1075,6 +1011,9 @@ static inline int rtnl_vfinfo_size(const struct net_device *dev,
 				 /* IFLA_VF_STATS_TX_DROPPED */
 				 nla_total_size_64bit(sizeof(__u64)));
 		}
+		if (dev->netdev_ops->ndo_get_vf_guid)
+			size += num_vfs * 2 *
+				nla_total_size(sizeof(struct ifla_vf_guid));
 		return size;
 	} else
 		return 0;
@@ -4443,9 +4382,6 @@ static int rtnl_fdb_del(struct sk_buff *skb, struct nlmsghdr *nlh,
 	__u8 *addr = NULL;
 	int err;
 	u16 vid;
-
-	if (!netlink_capable(skb, CAP_NET_ADMIN))
-		return -EPERM;
 
 	if (!del_bulk) {
 		err = nlmsg_parse_deprecated(nlh, sizeof(*ndm), tb, NDA_MAX,

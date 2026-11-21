@@ -1240,9 +1240,6 @@ static blk_status_t sd_setup_read_write_cmnd(struct scsi_cmnd *cmd)
 			goto fail;
 	}
 
-	if (rq->cmd_flags & REQ_RELIABLE)
-		rq->cmd_flags |= REQ_FUA;
-
 	fua = rq->cmd_flags & REQ_FUA ? 0x8 : 0;
 	dix = scsi_prot_sg_count(cmd);
 	dif = scsi_host_dif_capable(cmd->device->host, sdkp->protection_type);
@@ -2314,6 +2311,10 @@ sd_spinup_disk(struct scsi_disk *sdkp)
 				break;	/* unavailable */
 			if (sshdr.asc == 4 && sshdr.ascq == 0x1b)
 				break;	/* sanitize in progress */
+			if (sshdr.asc == 4 && sshdr.ascq == 0x24)
+				break;	/* depopulation in progress */
+			if (sshdr.asc == 4 && sshdr.ascq == 0x25)
+				break;	/* depopulation restoration in progress */
 			/*
 			 * Issue command to spin up drive when not ready
 			 */
@@ -3448,7 +3449,6 @@ static int sd_revalidate_disk(struct gendisk *disk)
 	struct scsi_disk *sdkp = scsi_disk(disk);
 	struct scsi_device *sdp = sdkp->device;
 	struct request_queue *q = sdkp->disk->queue;
-	const struct scsi_host_template *sht = sdp->host->hostt;
 	sector_t old_capacity = sdkp->capacity;
 	unsigned char *buffer;
 	unsigned int dev_max, rw_max;
@@ -3547,13 +3547,8 @@ static int sd_revalidate_disk(struct gendisk *disk)
 	 */
 	rw_max = min_not_zero(rw_max, sdp->host->opt_sectors);
 
-	if (!strncmp(sht->name, "ufshcd", 6)) {
-		/* Set rw_max using hw_max when device is ufs */
-		rw_max = queue_max_hw_sectors(q);
-	} else {
-		/* Do not exceed controller limit */
-		rw_max = min(rw_max, queue_max_hw_sectors(q));
-	}
+	/* Do not exceed controller limit */
+	rw_max = min(rw_max, queue_max_hw_sectors(q));
 
 	/*
 	 * Only update max_sectors if previously unset or if the current value
@@ -3905,7 +3900,9 @@ static void sd_shutdown(struct device *dev)
 	if ((system_state != SYSTEM_RESTART &&
 	     sdkp->device->manage_system_start_stop) ||
 	    (system_state == SYSTEM_POWER_OFF &&
-	     sdkp->device->manage_shutdown)) {
+	     sdkp->device->manage_shutdown) ||
+	    (system_state == SYSTEM_RUNNING &&
+	     sdkp->device->manage_runtime_start_stop)) {
 		sd_printk(KERN_NOTICE, sdkp, "Stopping disk\n");
 		sd_start_stop_device(sdkp, 0);
 	}

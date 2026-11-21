@@ -1033,11 +1033,6 @@ out:
 static __inline__ int neigh_max_probes(struct neighbour *n)
 {
 	struct neigh_parms *p = n->parms;
-	if (n->dev != NULL && !strcmp(n->dev->name, "aware_data0")) {
-		return (NEIGH_VAR(p, UCAST_PROBES) * 2) + NEIGH_VAR(p, APP_PROBES) +
-		       (n->nud_state & NUD_PROBE ? NEIGH_VAR(p, MCAST_REPROBES) :
-		        NEIGH_VAR(p, MCAST_PROBES));
-	}
 	return NEIGH_VAR(p, UCAST_PROBES) + NEIGH_VAR(p, APP_PROBES) +
 	       (n->nud_state & NUD_PROBE ? NEIGH_VAR(p, MCAST_REPROBES) :
 	        NEIGH_VAR(p, MCAST_PROBES));
@@ -1141,10 +1136,6 @@ static void neigh_timer_handler(struct timer_list *t)
 		}
 	} else {
 		/* NUD_PROBE|NUD_INCOMPLETE */
-		if (neigh->dev != NULL && !strcmp(neigh->dev->name, "aware_data0")) {
-			next = now + max(NEIGH_VAR(neigh->parms, RETRANS_TIME)/5,
-					 HZ/100);
-		} else
 		next = now + max(NEIGH_VAR(neigh->parms, RETRANS_TIME), HZ/100);
 	}
 
@@ -1205,11 +1196,6 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb,
 				next = now + 1;
 			} else {
 				immediate_probe = true;
-				if (neigh->dev != NULL && !strcmp(neigh->dev->name, "aware_data0")) {
-					next = now + max(NEIGH_VAR(neigh->parms,
-								   RETRANS_TIME)/25,
-							 HZ/100);
-				} else
 				next = now + max(NEIGH_VAR(neigh->parms,
 							   RETRANS_TIME),
 						 HZ / 100);
@@ -2307,6 +2293,7 @@ static const struct nla_policy nl_neightbl_policy[NDTA_MAX+1] = {
 static const struct nla_policy nl_ntbl_parm_policy[NDTPA_MAX+1] = {
 	[NDTPA_IFINDEX]			= { .type = NLA_U32 },
 	[NDTPA_QUEUE_LEN]		= { .type = NLA_U32 },
+	[NDTPA_QUEUE_LENBYTES]		= { .type = NLA_U32 },
 	[NDTPA_PROXY_QLEN]		= { .type = NLA_U32 },
 	[NDTPA_APP_PROBES]		= { .type = NLA_U32 },
 	[NDTPA_UCAST_PROBES]		= { .type = NLA_U32 },
@@ -3522,10 +3509,12 @@ static const struct seq_operations neigh_stat_seq_ops = {
 static void __neigh_notify(struct neighbour *n, int type, int flags,
 			   u32 pid)
 {
-	struct net *net = dev_net(n->dev);
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
+	struct net *net;
 
+	rcu_read_lock();
+	net = dev_net_rcu(n->dev);
 	skb = nlmsg_new(neigh_nlmsg_size(), GFP_ATOMIC);
 	if (skb == NULL)
 		goto errout;
@@ -3538,10 +3527,11 @@ static void __neigh_notify(struct neighbour *n, int type, int flags,
 		goto errout;
 	}
 	rtnl_notify(skb, net, 0, RTNLGRP_NEIGH, NULL, GFP_ATOMIC);
-	return;
+	goto out;
 errout:
-	if (err < 0)
-		rtnl_set_sk_err(net, RTNLGRP_NEIGH, err);
+	rtnl_set_sk_err(net, RTNLGRP_NEIGH, err);
+out:
+	rcu_read_unlock();
 }
 
 void neigh_app_ns(struct neighbour *n)

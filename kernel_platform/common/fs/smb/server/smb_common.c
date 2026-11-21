@@ -5,9 +5,6 @@
  */
 
 #include <linux/user_namespace.h>
-#ifdef CONFIG_KDP
-#include <linux/kdp.h>
-#endif
 
 #include "smb_common.h"
 #include "server.h"
@@ -518,7 +515,7 @@ int ksmbd_extract_shortname(struct ksmbd_conn *conn, const char *longname,
 
 	p = strrchr(longname, '.');
 	if (p == longname) { /*name starts with a dot*/
-		strscpy(extension, "___", strlen("___"));
+		strscpy(extension, "___", sizeof(extension));
 	} else {
 		if (p) {
 			p++;
@@ -794,10 +791,6 @@ void ksmbd_revert_fsids(struct ksmbd_work *work)
 	WARN_ON(!work->saved_cred);
 
 	cred = current_cred();
-#ifdef CONFIG_KDP
-	if (is_kdp_protect_addr((unsigned long)cred))
-		cred = (const struct cred *)(GET_ROCRED_RCU(cred)->reflected_cred);
-#endif
 	revert_creds(work->saved_cred);
 	put_cred(cred);
 	work->saved_cred = NULL;

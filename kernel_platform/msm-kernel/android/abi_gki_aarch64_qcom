@@ -57,7 +57,6 @@
   bitmap_find_next_zero_area_off
   bitmap_free
   __bitmap_or
-  bitmap_parselist
   bitmap_print_to_pagebuf
   bitmap_release_region
   __bitmap_set
@@ -342,6 +341,7 @@
   device_match_fwnode
   device_match_name
   device_match_of_node
+  device_node_to_regmap
   device_property_present
   device_property_read_string
   device_property_read_u16_array
@@ -1186,10 +1186,10 @@
   mmc_cqe_request_done
   mmc_execute_tuning
   mmc_hs200_tuning
-  mmc_issue_type
-  mmc_of_parse
   __mmc_poll_for_busy
   mmc_prepare_busy_cmd
+  mmc_issue_type
+  mmc_of_parse
   mmc_regulator_get_supply
   mmc_regulator_set_ocr
   mmc_regulator_set_vqmmc
@@ -1535,7 +1535,6 @@
   proc_set_user
   proto_register
   proto_unregister
-  __pskb_copy_fclone
   pskb_expand_head
   __pskb_pull_tail
   ___pskb_trim
@@ -1742,7 +1741,6 @@
   sched_feat_keys
   sched_feat_names
   sched_setattr
-  sched_set_fifo_low
   sched_set_normal
   sched_setscheduler
   sched_setscheduler_nocheck
@@ -1801,7 +1799,6 @@
   set_capacity_and_notify
   set_next_entity
   __SetPageMovable
-  set_page_private
   set_task_cpu
   sg_alloc_table
   sg_alloc_table_from_pages_segment
@@ -2083,6 +2080,7 @@
   __traceiter_android_rvh_sched_newidle_balance
   __traceiter_android_rvh_sched_nohz_balancer_kick
   __traceiter_android_rvh_schedule
+  __traceiter_android_rvh_schedule_bug
   __traceiter_android_rvh_select_task_rq_fair
   __traceiter_android_rvh_select_task_rq_rt
   __traceiter_android_rvh_set_cpus_allowed_by_task
@@ -2139,8 +2137,6 @@
   __traceiter_android_vh_ufs_send_uic_command
   __traceiter_android_vh_ufs_update_sdev
   __traceiter_android_vh_update_topology_flags_workfn
-  __traceiter_android_vh_zs_shrinker_adjust
-  __traceiter_android_vh_zs_shrinker_bypass
   __traceiter_cpu_frequency_limits
   __traceiter_ipi_entry
   __traceiter_ipi_raise
@@ -2191,6 +2187,7 @@
   __tracepoint_android_rvh_sched_newidle_balance
   __tracepoint_android_rvh_sched_nohz_balancer_kick
   __tracepoint_android_rvh_schedule
+  __tracepoint_android_rvh_schedule_bug
   __tracepoint_android_rvh_select_task_rq_fair
   __tracepoint_android_rvh_select_task_rq_rt
   __tracepoint_android_rvh_set_cpus_allowed_by_task
@@ -2247,8 +2244,6 @@
   __tracepoint_android_vh_ufs_send_uic_command
   __tracepoint_android_vh_ufs_update_sdev
   __tracepoint_android_vh_update_topology_flags_workfn
-  __tracepoint_android_vh_zs_shrinker_adjust
-  __tracepoint_android_vh_zs_shrinker_bypass
   __tracepoint_cpu_frequency_limits
   __tracepoint_ipi_entry
   __tracepoint_ipi_raise
@@ -2393,7 +2388,6 @@
   usb_unregister_notify
   __usecs_to_jiffies
   usleep_range_state
-  utf8_data_table
   uuid_parse
   v4l2_compat_ioctl32
   v4l2_ctrl_find

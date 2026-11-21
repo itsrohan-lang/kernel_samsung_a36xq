@@ -1,5 +1,0 @@
-config SEC_QC_MOCK
-	tristate "SEC Qualcomm Mock driver under QEMU based testing"
-	default n
-	help
-	  TODO: help is not ready.
