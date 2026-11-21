@@ -1,0 +1,32 @@
+name: osc-probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Samsung OSC
+        shell: bash
+        run: |
+          set -x
+          mkdir -p out
+          for q in "A366EXXUCDZIF" "SM-A366E" ""; do
+            name="${q:-all}"
+            curl -sS -L --compressed \
+              -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' \
+              -H 'Accept-Language: en-US,en;q=0.9' \
+              "https://opensource.samsung.com/uploadList?menuItem=mobile&searchValue=$q" \
+              -o "out/osc_${name}.html" -w "%{http_code} %{size_download} %{url_effective}\n" || true
+          done
+          curl -sS -L --compressed \
+            -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' \
+            "https://opensource.samsung.com/reception/receptionSub.do?method=downLoad&attach_id=8697" \
+            -o out/attach_8697.bin -w "attach8697 %{http_code} %{size_download}\n" || true
+          grep -a -o -i -E 'A366EXXUCDZIF|SM-A366E[^<]*|attach_id=[0-9]+|Opensource[^<]{0,80}' out/osc_*.html | head -200 || true
+          ls -l out
+      - name: Upload probe output
+        uses: actions/upload-artifact@v4
+        with:
+          name: osc-probe-output
+          path: out
+          if-no-files-found: warn
